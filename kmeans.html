@@ -554,20 +554,49 @@ function _expStopPlay() {
   document.getElementById('exp-play-btn').textContent = '▶ Play';
 }
 
+/* ── Global mean SV per frame (for consistent VDP/V_hip thresholds) ── */
+function _globalMeanPerFrame() {
+  const map = {};
+  for (let f = 0; f < KM.nFrames; f++) {
+    const vals = KM.uvox.map(v => v.svByFrame[f]).filter(v => v != null && isFinite(v));
+    map[f] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 1;
+  }
+  return map;
+}
+
+/* computeMetrics using a supplied reference mean for VDP/V_hip thresholds */
+function computeMetricsWithRef(svArr, refMean) {
+  const sv = svArr.filter(isFinite);
+  const n  = sv.length;
+  if (!n) return null;
+  const sum  = sv.reduce((a, b) => a + b, 0);
+  const mean = sum / n;
+  const sorted = [...sv].sort((a, b) => a - b);
+  const q25  = sorted[Math.floor(n * 0.25)];
+  const q75  = sorted[Math.floor(n * 0.75)];
+  const iqr  = q75 - q25;
+  const ref  = refMean ?? mean;
+  const vdp  = sv.filter(v => v < 0.3   * ref).length / n * 100;
+  const hvr  = sv.filter(v => v > 1.674 * ref).length / n * 100;
+  const vh   = mean > 1e-9 ? (iqr / mean) * 100 : 0;
+  return { vdp, hvr, vh, msv: mean, iqr, n };
+}
+
 /* ── Cluster metrics table ────────────────────────────────── */
 function renderClusterTable() {
   const tbody = document.getElementById('cluster-body');
   tbody.innerHTML = '';
+  const gMeans = _globalMeanPerFrame();
 
   for (let ki = 0; ki < KM.k; ki++) {
     const indices = KM.uvox.map((_, i) => i).filter(i => KM.labels[i] === ki);
-    // All voxels in this cluster across all frames
     const sv = [];
     for (const i of indices)
-      for (const f of Object.keys(KM.uvox[i].svByFrame))
-        sv.push({ sv: KM.uvox[i].svByFrame[f], frame: +f });
-
-    const m = computeMetrics(sv);
+      for (const [f, v] of Object.entries(KM.uvox[i].svByFrame))
+        sv.push(v);
+    /* Use average global mean across frames as the reference */
+    const refMean = Object.values(gMeans).reduce((a, b) => a + b, 0) / KM.nFrames;
+    const m = computeMetricsWithRef(sv, refMean);
     if (!m) continue;
 
     const tr = document.createElement('tr');
@@ -579,22 +608,23 @@ function renderClusterTable() {
         const txt = contrastText(col);
         return `<td><span class="cell-val" style="background:${col};color:${txt}">${fmt(m[met], met)}</span></td>`;
       }).join('') +
-      `<td style="color:var(--muted)">${(indices.length).toLocaleString()}</td>`;
+      `<td style="color:var(--muted)">${indices.length.toLocaleString()} <span style="font-size:11px">(${(indices.length/KM.uvox.length*100).toFixed(1)}%)</span></td>`;
     tbody.appendChild(tr);
   }
 }
 
 /* ── Cluster temporal profiles ───────────────────────────── */
 function renderClusterTemporal() {
-  const frames = Array.from({ length: KM.nFrames }, (_, i) => i);
-  const met    = KM.kmMetric;
-  const traces = [];
+  const frames  = Array.from({ length: KM.nFrames }, (_, i) => i);
+  const met     = KM.kmMetric;
+  const gMeans  = _globalMeanPerFrame();
+  const traces  = [];
 
   for (let ki = 0; ki < KM.k; ki++) {
     const indices = KM.uvox.map((_, i) => i).filter(i => KM.labels[i] === ki);
     const ys = frames.map(f => {
       const sv = indices.map(i => KM.uvox[i].svByFrame[f]).filter(v => v != null && isFinite(v));
-      const m  = computeMetrics(sv.map(v => ({ sv: v })));
+      const m  = computeMetricsWithRef(sv, gMeans[f]);
       return m ? m[met] : null;
     });
     traces.push({
