@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XV Viewer — K-Means View</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script src="js/samples.js"></script>
+  <script src="js/common.js"></script>
+</head>
+<body>
+
+<nav class="navbar">
+  <span class="nav-brand">XV Viewer</span>
+  <div class="nav-links">
+    <a href="index.html">Dashboard</a>
+    <a href="kmeans.html" class="active">K-Means View</a>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- ── Upload (same as index) ── -->
+  <section class="upload-section">
+    <h2>Voxel Grouping — K-Means View</h2>
+    <p>Cluster lung voxels by spatial location, functional ventilation behaviour, or both.
+       Explore which regions move together and compare cluster-level XV metrics.</p>
+
+    <div class="example-btns">
+      <button class="btn-example" onclick="loadExample('cf')">▶ CF Patient Example</button>
+      <button class="btn-example" onclick="loadExample('ctrl')">▶ Healthy Control Example</button>
+    </div>
+
+    <div class="drop-zone" id="drop-zone">
+      <input type="file" id="file-input" multiple accept=".csv">
+      <div class="dz-icon">📂</div>
+      <div class="dz-title">Drop <code>_final.csv</code> file(s) here</div>
+      <div class="dz-sub">Whole-lung or lobar CSVs accepted.</div>
+    </div>
+  </section>
+
+  <div id="data-info" hidden></div>
+
+  <div id="viz" hidden>
+
+    <!-- Controls bar -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="kmeans-controls">
+
+        <div class="ctrl-group">
+          <label>Features</label>
+          <select id="feat-select">
+            <option value="spatial">Spatial (x, y, z)</option>
+            <option value="functional">Functional (SV per frame)</option>
+            <option value="combined">Combined (x, y, z + mean SV)</option>
+          </select>
+        </div>
+
+        <div class="ctrl-group">
+          <label>K =</label>
+          <input type="range" id="k-slider" min="2" max="8" value="5">
+          <span id="k-val" style="font-weight:700;min-width:14px">5</span>
+        </div>
+
+        <div class="ctrl-group">
+          <label>Colour 3D by</label>
+          <select id="color3d-mode">
+            <option value="cluster">K-Means Cluster</option>
+            <option value="sv">SV Value (frame)</option>
+            <option value="lobe">Auto-detected Lobe</option>
+          </select>
+        </div>
+
+        <div class="ctrl-group" id="frame-ctrl-3d" style="display:none">
+          <label>Frame</label>
+          <input type="range" id="frame-slider-3d" min="0" max="6" value="6">
+          <span id="frame-val-3d" style="font-weight:700;min-width:14px">6</span>
+        </div>
+
+        <button class="btn-run" id="btn-run">Run K-Means</button>
+        <button class="btn-run" id="btn-sweep" style="background:var(--muted)">Sweep K (2–8)</button>
+        <div id="sil-badge" style="display:none;align-items:center;gap:6px;font-size:12px;font-weight:600">
+          <span style="color:var(--muted)">Silhouette:</span>
+          <span id="sil-score" style="padding:3px 10px;border-radius:100px;font-size:13px"></span>
+        </div>
+
+      </div>
+
+      <!-- Cluster colour legend -->
+      <div class="cluster-legend" id="cluster-legend" style="display:none"></div>
+    </div>
+
+    <!-- Silhouette sweep chart (hidden until sweep is run) -->
+    <div class="card" id="sil-card" style="display:none;margin-bottom:16px">
+      <div class="card-header">
+        <h3>Silhouette Score vs K</h3>
+        <span style="font-size:11px;color:var(--muted)">Higher = better-separated clusters (max 1.0)</span>
+      </div>
+      <div style="height:220px" id="chart-silhouette"></div>
+    </div>
+
+    <!-- Main 2-col grid -->
+    <div class="viz-grid" style="margin-bottom:16px">
+
+      <!-- 3D scatter -->
+      <div class="card" style="grid-column: span 2;">
+        <div class="card-header">
+          <h3 id="scatter-title">3D Voxel Scatter</h3>
+          <span style="font-size:11px;color:var(--muted)">Drag to rotate · Scroll to zoom</span>
+        </div>
+        <div style="height:480px" id="chart-3d"></div>
+      </div>
+
+    </div>
+
+    <!-- Bottom: cluster metrics table + temporal chart -->
+    <div class="viz-grid">
+
+      <div class="card">
+        <h3>Cluster Metrics <span style="font-weight:400;color:var(--muted);font-size:12px">(averaged over all frames)</span></h3>
+        <div style="overflow-x:auto">
+          <table class="metrics-tbl" id="cluster-tbl">
+            <thead>
+              <tr>
+                <th style="text-align:left">Cluster</th>
+                <th>VDP %</th><th>VH %</th><th>MSV</th><th>HVR %</th><th>N voxels</th>
+              </tr>
+            </thead>
+            <tbody id="cluster-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Cluster Temporal Profiles</h3>
+          <div class="metric-tabs" id="km-metric-tabs">
+            <button class="mtab active" data-m="vdp">VDP</button>
+            <button class="mtab" data-m="vh">VH</button>
+            <button class="mtab" data-m="msv">MSV</button>
+            <button class="mtab" data-m="hvr">HVR</button>
+          </div>
+        </div>
+        <div class="chart-wrap" id="chart-km-temporal"></div>
+      </div>
+
+    </div>
+
+  </div><!-- /viz -->
+
+</div><!-- /container -->
+
+<script>
+/* ============================================================
+   K-MEANS IMPLEMENTATION
+   ============================================================ */
+function sqDist(a, b) {
+  return a.reduce((s, v, i) => s + (v - b[i]) ** 2, 0);
+}
+
+/* Silhouette score — subsampled to MAX_S points for performance.
+   Returns a value in [-1, 1]; higher = better cluster separation. */
+function silhouetteScore(pts, labels, k, MAX_S = 600) {
+  let idxs = Array.from({ length: pts.length }, (_, i) => i);
+  if (idxs.length > MAX_S) {
+    for (let i = idxs.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [idxs[i], idxs[j]] = [idxs[j], idxs[i]];
+    }
+    idxs = idxs.slice(0, MAX_S);
+  }
+
+  /* Group sampled indices by cluster */
+  const clusters = Array.from({ length: k }, () => []);
+  idxs.forEach(i => clusters[labels[i]].push(i));
+
+  let total = 0, count = 0;
+  for (const i of idxs) {
+    const li = labels[i];
+    const same = clusters[li].filter(j => j !== i);
+    /* Singleton cluster → silhouette = 0 */
+    if (!same.length) { count++; continue; }
+
+    const a = same.reduce((s, j) => s + Math.sqrt(sqDist(pts[i], pts[j])), 0) / same.length;
+
+    let b = Infinity;
+    for (let ki = 0; ki < k; ki++) {
+      if (ki === li || !clusters[ki].length) continue;
+      const d = clusters[ki].reduce((s, j) => s + Math.sqrt(sqDist(pts[i], pts[j])), 0) / clusters[ki].length;
+      if (d < b) b = d;
+    }
+
+    total += b === Infinity ? 0 : (b - a) / Math.max(a, b);
+    count++;
+  }
+  return count ? total / count : 0;
+}
+
+function normalise(pts) {
+  const D = pts[0].length;
+  const lo = Array(D).fill(Infinity), hi = Array(D).fill(-Infinity);
+  for (const p of pts) p.forEach((v, j) => { if (v < lo[j]) lo[j] = v; if (v > hi[j]) hi[j] = v; });
+  return pts.map(p => p.map((v, j) => {
+    const r = hi[j] - lo[j]; return r > 1e-9 ? (v - lo[j]) / r : 0;
+  }));
+}
+
+function kmeanspp(pts, k) {
+  if (pts.length <= k) return pts.map((_, i) => i % k);
+  const cents = [pts[Math.floor(Math.random() * pts.length)]];
+  while (cents.length < k) {
+    const dists = pts.map(p => Math.min(...cents.map(c => sqDist(p, c))));
+    let r = Math.random() * dists.reduce((a,b) => a+b, 0), i = 0;
+    for (; i < dists.length - 1 && (r -= dists[i]) > 0; i++);
+    cents.push([...pts[i]]);
+  }
+
+  let labels = new Array(pts.length).fill(0);
+  for (let iter = 0; iter < 120; iter++) {
+    const newL = pts.map(p => {
+      let mi = 0, md = Infinity;
+      cents.forEach((c, ki) => { const d = sqDist(p, c); if (d < md) { md = d; mi = ki; } });
+      return mi;
+    });
+    if (newL.every((l, i) => l === labels[i])) break;
+    labels = newL;
+    for (let ki = 0; ki < k; ki++) {
+      const cl = pts.filter((_, i) => labels[i] === ki);
+      if (!cl.length) continue;
+      cents[ki] = pts[0].map((_, j) => cl.reduce((s, p) => s + p[j], 0) / cl.length);
+    }
+  }
+  return labels;
+}
+
+/* ============================================================
+   APP STATE
+   ============================================================ */
+const KM = {
+  uvox:     [],   // unique voxels [{x,y,z,svByFrame:{}}]
+  lobeData: {},
+  nFrames:  7,
+  k:        5,
+  labels:   null, // cluster label per unique voxel
+  kmMetric: 'vdp',
+  frame3d:  6,
+  colorMode: 'cluster',
+  label:    '',
+};
+
+const CLUSTER_COLORS = ['#3b82f6','#ef4444','#10b981','#f59e0b','#8b5cf6','#06b6d4','#f97316','#ec4899'];
+const LOBE_COLORS_ARR = { RUL:'#3b82f6', RML:'#10b981', RLL:'#f59e0b', LUL:'#8b5cf6', LLL:'#ef4444', whole:'#64748b' };
+
+/* ============================================================
+   LOAD
+   ============================================================ */
+function loadExample(type) {
+  KM.label = type === 'cf' ? 'CF Patient (example)' : 'Healthy Control (example)';
+  const voxels = parseRawArray(type === 'cf' ? SAMPLE_CF : SAMPLE_CTRL);
+  ingest(voxels);
+}
+
+function handleFiles(files) {
+  const fa = [...files];
+  const hasLobe = fa.some(f => detectLobeFromName(f.name));
+  KM.label = fa[0].name.replace(/_final\.csv$/i, '');
+
+  if (hasLobe) {
+    const pending = { n: fa.length }, tmp = {};
+    fa.forEach(f => {
+      const lobe = detectLobeFromName(f.name) || 'whole';
+      Papa.parse(f, {
+        complete(r) { tmp[lobe] = parseCSVResult(r); if (--pending.n === 0) ingestLobar(tmp); },
+        skipEmptyLines: true
+      });
+    });
+  } else {
+    Papa.parse(fa[0], {
+      complete(r) { ingest(parseCSVResult(r)); },
+      skipEmptyLines: true
+    });
+  }
+}
+
+function ingest(voxels) {
+  KM.lobeData = assignLobesFromCoords(voxels);
+  KM.nFrames  = new Set(voxels.map(v => v.frame)).size;
+  KM.uvox     = uniqueVoxels(voxels);
+  document.getElementById('frame-slider-3d').max   = KM.nFrames - 1;
+  document.getElementById('frame-slider-3d').value = KM.nFrames - 1;
+  KM.frame3d  = KM.nFrames - 1;
+  showInfo(voxels);
+}
+
+function ingestLobar(lobeMap) {
+  const whole = []; for (const v of Object.values(lobeMap)) whole.push(...v);
+  KM.lobeData = { ...lobeMap, whole };
+  ingest(whole);
+}
+
+function showInfo(voxels) {
+  const info = document.getElementById('data-info');
+  info.hidden = false;
+  info.innerHTML = `<strong>${KM.label}</strong>
+    <span class="info-pill">Frames: ${KM.nFrames}</span>
+    <span class="info-pill">Unique voxels: ${KM.uvox.length.toLocaleString()}</span>`;
+  document.getElementById('viz').hidden = false;
+  runAndRender();
+}
+
+/* ============================================================
+   K-MEANS + RENDER
+   ============================================================ */
+function buildFeaturePts(feat) {
+  return KM.uvox.map(v => {
+    if (feat === 'spatial') return [v.x, v.y, v.z];
+    if (feat === 'functional')
+      return Array.from({ length: KM.nFrames }, (_, f) => v.svByFrame[f] ?? 0);
+    /* combined */
+    const vals = Object.values(v.svByFrame);
+    const meanSV = vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length);
+    return [v.x, v.y, v.z, meanSV];
+  });
+}
+
+function showSilhouetteBadge(score) {
+  const badge = document.getElementById('sil-badge');
+  const span  = document.getElementById('sil-score');
+  badge.style.display = 'flex';
+  const bg = score >= 0.5 ? '#dcfce7' : score >= 0.25 ? '#fef9c3' : '#fee2e2';
+  const fg = score >= 0.5 ? '#166534' : score >= 0.25 ? '#854d0e' : '#991b1b';
+  span.style.background = bg;
+  span.style.color = fg;
+  span.textContent = score.toFixed(3);
+}
+
+function runAndRender() {
+  const feat   = document.getElementById('feat-select').value;
+  KM.k         = +document.getElementById('k-slider').value;
+  KM.colorMode = document.getElementById('color3d-mode').value;
+  KM.frame3d   = +document.getElementById('frame-slider-3d').value;
+
+  const normPts = normalise(buildFeaturePts(feat));
+  KM.labels = kmeanspp(normPts, KM.k);
+  showSilhouetteBadge(silhouetteScore(normPts, KM.labels, KM.k));
+
+  renderScatter3D();
+  renderClusterLegend();
+  renderClusterTable();
+  renderClusterTemporal();
+}
+
+/* ── 3D scatter ─────────────────────────────────────────────── */
+function renderScatter3D() {
+  const uvox = KM.uvox;
+  const mode = KM.colorMode;
+
+  let colorArr, cscale, cmin, cmax, ctitle;
+
+  if (mode === 'cluster') {
+    colorArr = KM.labels;
+    cscale   = CLUSTER_COLORS.slice(0, KM.k).flatMap((c, i) => [[i/(KM.k-1), c], [(i+0.999)/(KM.k-1), c]]);
+    cmin = 0; cmax = KM.k - 1;
+    ctitle = 'Cluster';
+  } else if (mode === 'sv') {
+    colorArr = uvox.map(v => v.svByFrame[KM.frame3d] ?? 0);
+    cscale   = 'Viridis';
+    cmin = null; cmax = null;
+    ctitle = `SV (frame ${KM.frame3d})`;
+  } else {
+    // lobe
+    const lobeOf = buildLobeIndex();
+    colorArr = uvox.map((_, i) => lobeOf[i]);
+    const lobeNames = ['RUL','RML','RLL','LUL','LLL'];
+    cscale = lobeNames.flatMap((l, i) => {
+      const t1 = i / (lobeNames.length - 1), t2 = (i + 0.999) / (lobeNames.length - 1);
+      return [[t1, LOBE_COLORS_ARR[l]], [t2, LOBE_COLORS_ARR[l]]];
+    });
+    cmin = 0; cmax = lobeNames.length - 1;
+    ctitle = 'Lobe';
+  }
+
+  const trace = {
+    type: 'scatter3d', mode: 'markers',
+    x: uvox.map(v => v.x), y: uvox.map(v => v.y), z: uvox.map(v => v.z),
+    marker: {
+      size: 2.8, opacity: 0.8,
+      color: colorArr,
+      colorscale: cscale,
+      cmin, cmax,
+      colorbar: { title: ctitle, thickness: 14, len: 0.6 },
+      showscale: true,
+    },
+    hovertemplate: 'x:%{x:.1f} y:%{y:.1f} z:%{z:.1f}<extra></extra>',
+  };
+
+  document.getElementById('scatter-title').textContent =
+    mode === 'cluster' ? `3D Voxel Scatter — K=${KM.k} Clusters`
+    : mode === 'sv'    ? `3D Voxel Scatter — SV at Frame ${KM.frame3d}`
+    :                    '3D Voxel Scatter — Auto-detected Lobes';
+
+  Plotly.react('chart-3d', [trace], {
+    paper_bgcolor: 'white',
+    scene: {
+      bgcolor: '#f8fafc',
+      xaxis: { title: 'X', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0' },
+      yaxis: { title: 'Y', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0' },
+      zaxis: { title: 'Z', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0' },
+      camera: { eye: { x: 1.6, y: 1.2, z: 0.8 } },
+    },
+    margin: { l: 0, r: 0, t: 0, b: 0 },
+  }, { responsive: true, displayModeBar: true, displaylogo: false,
+    modeBarButtonsToRemove: ['toImage'] });
+}
+
+/* Map each uvox index → lobe index (0-4) */
+function buildLobeIndex() {
+  const lobeNames = ['RUL','RML','RLL','LUL','LLL'];
+  const idx = new Array(KM.uvox.length).fill(2);
+  lobeNames.forEach((lobe, li) => {
+    const pts = (KM.lobeData[lobe] || []).filter(v => v.frame === 0);
+    const keys = new Set(pts.map(v => `${v.x},${v.y},${v.z}`));
+    KM.uvox.forEach((uv, i) => { if (keys.has(`${uv.x},${uv.y},${uv.z}`)) idx[i] = li; });
+  });
+  return idx;
+}
+
+/* ── Cluster legend pills ─────────────────────────────────── */
+function renderClusterLegend() {
+  if (KM.colorMode !== 'cluster') { document.getElementById('cluster-legend').style.display = 'none'; return; }
+  const leg = document.getElementById('cluster-legend');
+  leg.style.display = 'flex';
+  leg.innerHTML = Array.from({ length: KM.k }, (_, ki) => {
+    const n = KM.labels.filter(l => l === ki).length;
+    return `<span class="cl-pill"><span class="cl-dot" style="background:${CLUSTER_COLORS[ki]}"></span>Cluster ${ki+1} (${n})</span>`;
+  }).join('');
+}
+
+/* ── Cluster metrics table ────────────────────────────────── */
+function renderClusterTable() {
+  const tbody = document.getElementById('cluster-body');
+  tbody.innerHTML = '';
+
+  for (let ki = 0; ki < KM.k; ki++) {
+    const indices = KM.uvox.map((_, i) => i).filter(i => KM.labels[i] === ki);
+    // All voxels in this cluster across all frames
+    const sv = [];
+    for (const i of indices)
+      for (const f of Object.keys(KM.uvox[i].svByFrame))
+        sv.push({ sv: KM.uvox[i].svByFrame[f], frame: +f });
+
+    const m = computeMetrics(sv);
+    if (!m) continue;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><span style="display:inline-flex;align-items:center;gap:5px">
+      <span style="width:9px;height:9px;border-radius:50%;background:${CLUSTER_COLORS[ki]};display:inline-block"></span>
+      Cluster ${ki+1}</span></td>` +
+      ['vdp','vh','msv','hvr'].map(met => {
+        const col = metricToColor(m[met], met);
+        const txt = contrastText(col);
+        return `<td><span class="cell-val" style="background:${col};color:${txt}">${fmt(m[met], met)}</span></td>`;
+      }).join('') +
+      `<td style="color:var(--muted)">${(indices.length).toLocaleString()}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+/* ── Cluster temporal profiles ───────────────────────────── */
+function renderClusterTemporal() {
+  const frames = Array.from({ length: KM.nFrames }, (_, i) => i);
+  const met    = KM.kmMetric;
+  const traces = [];
+
+  for (let ki = 0; ki < KM.k; ki++) {
+    const indices = KM.uvox.map((_, i) => i).filter(i => KM.labels[i] === ki);
+    const ys = frames.map(f => {
+      const sv = indices.map(i => KM.uvox[i].svByFrame[f]).filter(v => v != null && isFinite(v));
+      const m  = computeMetrics(sv.map(v => ({ sv: v })));
+      return m ? m[met] : null;
+    });
+    traces.push({
+      x: frames, y: ys, name: `Cluster ${ki+1}`,
+      mode: 'lines+markers',
+      line: { color: CLUSTER_COLORS[ki], width: 2 },
+      marker: { size: 5 }
+    });
+  }
+
+  Plotly.react('chart-km-temporal', traces, {
+    paper_bgcolor: 'white', plot_bgcolor: 'white',
+    margin: { l: 52, r: 12, t: 10, b: 42 },
+    xaxis: { title: 'Frame', dtick: 1, range: [-0.4, KM.nFrames - 0.6] },
+    yaxis: { title: METRIC_CFG[met].label },
+    legend: { orientation: 'h', y: -0.28, font: { size: 11 } },
+    hovermode: 'x unified',
+    font: { family: 'system-ui, sans-serif', size: 12 }
+  }, { responsive: true, displayModeBar: false });
+}
+
+/* ============================================================
+   EVENT WIRING
+   ============================================================ */
+const dz  = document.getElementById('drop-zone');
+const fin = document.getElementById('file-input');
+dz.addEventListener('click',     ()  => fin.click());
+fin.addEventListener('change',   e   => handleFiles(e.target.files));
+dz.addEventListener('dragover',  e   => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', ()  => dz.classList.remove('drag-over'));
+dz.addEventListener('drop',      e   => { e.preventDefault(); dz.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); });
+
+function sweepSilhouette() {
+  const feat    = document.getElementById('feat-select').value;
+  const normPts = normalise(buildFeaturePts(feat));
+  const ks      = [2, 3, 4, 5, 6, 7, 8];
+  const scores  = ks.map(k => {
+    const labels = kmeanspp(normPts, k);
+    return silhouetteScore(normPts, labels, k);
+  });
+
+  const bestK = ks[scores.indexOf(Math.max(...scores))];
+
+  const card = document.getElementById('sil-card');
+  card.style.display = 'block';
+
+  Plotly.react('chart-silhouette', [{
+    type: 'bar',
+    x: ks, y: scores,
+    text: scores.map(s => s.toFixed(3)),
+    textposition: 'outside',
+    marker: {
+      color: ks.map(k => k === bestK ? '#3b82f6' : '#cbd5e1'),
+    },
+  }], {
+    paper_bgcolor: 'white', plot_bgcolor: 'white',
+    margin: { l: 48, r: 16, t: 16, b: 44 },
+    xaxis: { title: 'K', dtick: 1, fixedrange: true },
+    yaxis: { title: 'Silhouette score', range: [Math.min(0, ...scores) - 0.05, Math.max(...scores) + 0.12], fixedrange: true },
+    font: { family: 'system-ui, sans-serif', size: 12 },
+    annotations: [{
+      x: bestK, y: Math.max(...scores) + 0.08,
+      text: `Best K = ${bestK}`, showarrow: false,
+      font: { size: 11, color: '#3b82f6' },
+    }],
+  }, { responsive: true, displayModeBar: false });
+}
+
+document.getElementById('btn-run').addEventListener('click', runAndRender);
+document.getElementById('btn-sweep').addEventListener('click', sweepSilhouette);
+
+document.getElementById('k-slider').addEventListener('input', e =>
+  document.getElementById('k-val').textContent = e.target.value);
+
+document.getElementById('color3d-mode').addEventListener('change', e => {
+  const showFrame = e.target.value === 'sv';
+  document.getElementById('frame-ctrl-3d').style.display = showFrame ? 'flex' : 'none';
+  if (KM.labels) renderScatter3D(), renderClusterLegend();
+});
+
+document.getElementById('frame-slider-3d').addEventListener('input', e => {
+  KM.frame3d = +e.target.value;
+  document.getElementById('frame-val-3d').textContent = KM.frame3d;
+  if (KM.labels) renderScatter3D();
+});
+
+document.getElementById('km-metric-tabs').addEventListener('click', e => {
+  const btn = e.target.closest('.mtab');
+  if (!btn) return;
+  document.querySelectorAll('#km-metric-tabs .mtab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  KM.kmMetric = btn.dataset.m;
+  if (KM.labels) renderClusterTemporal();
+});
+</script>
+</body>
+</html>

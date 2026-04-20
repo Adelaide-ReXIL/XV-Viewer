@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XV Viewer — X-ray Velocimetry Dashboard</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <!-- Data & logic modules -->
+  <script src="js/samples.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/lung-map.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/app.js"></script>
+</head>
+<body>
+
+<nav class="navbar">
+  <span class="nav-brand">XV Viewer</span>
+  <div class="nav-links">
+    <a href="index.html" class="active">Dashboard</a>
+    <a href="kmeans.html">K-Means View</a>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- ── Upload ── -->
+  <section class="upload-section">
+    <h2>X-ray Velocimetry Clinical Dashboard</h2>
+    <p>Visualise how ventilation (XV) values evolve across breath frames — per lung lobe.
+       Upload <code>_final.csv</code> file(s), or explore the built-in examples.</p>
+    <div class="example-btns">
+      <button class="btn-example" onclick="loadExample('cf')">▶ CF Patient Example</button>
+      <button class="btn-example" onclick="loadExample('ctrl')">▶ Healthy Control Example</button>
+    </div>
+    <div class="drop-zone" id="drop-zone">
+      <input type="file" id="file-input" multiple accept=".csv">
+      <div class="dz-icon">📂</div>
+      <div class="dz-title">Drop <code>_final.csv</code> files here or click to browse</div>
+      <div class="dz-sub">
+        Upload a single whole-lung file <em>or</em> multiple lobar files (filenames containing
+        RUL / RML / RLL / LUL / LLL). A whole-lung file is auto-segmented into lobes.
+      </div>
+    </div>
+  </section>
+
+  <div id="data-info" hidden></div>
+
+  <!-- ── Visualizations ── -->
+  <div id="viz" hidden>
+
+    <!-- Row 1 : 3D SV scatter (full width) ───────────────── -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <h3>3D Voxel Scatter — SV at Frame <span id="scatter-frame-label">6</span></h3>
+        <span style="font-size:11px;color:var(--muted)">
+          Each dot = one voxel &nbsp;·&nbsp; colour = SV value &nbsp;·&nbsp; drag to rotate
+        </span>
+      </div>
+
+      <!-- Animation controls -->
+      <div class="frame-ctrl" style="margin-bottom:4px">
+        <button id="play-btn" class="btn-play">▶ Play</button>
+        <span>Frame</span>
+        <input type="range" id="scatter-slider" min="0" max="6" value="6">
+        <span class="frame-val" id="scatter-frame-val">6</span>
+        <span style="color:var(--muted);font-size:11px">(0 = start of inspiration → 6 = end)</span>
+      </div>
+
+      <div style="height:500px" id="chart-3d"></div>
+    </div>
+
+    <!-- Row 2 : Lung map + Metrics table ─────────────────── -->
+    <div class="viz-grid" style="margin-bottom:16px">
+
+      <!-- Lung map panel -->
+      <div class="card" id="lung-panel">
+        <div class="card-header">
+          <h3>Ventilation Map</h3>
+          <div class="metric-tabs" id="metric-tabs">
+            <button class="mtab active" data-m="vdp">VDP</button>
+            <button class="mtab" data-m="hvr">V_hip</button>
+            <button class="mtab" data-m="vh">VH</button>
+            <button class="mtab" data-m="msv">MSV</button>
+          </div>
+        </div>
+
+        <!-- SVG lung — anatomical anterior view (patient's right = viewer's left) -->
+        <div id="lung-svg-wrap">
+          <svg id="lung-svg" viewBox="0 0 460 392" xmlns="http://www.w3.org/2000/svg">
+            <path d="M 10,56 C 10,28 62,14 112,14 C 162,14 208,33 215,56 L 215,307 C 215,344 185,374 130,378 C 78,381 10,357 10,308 Z"
+              fill="none" stroke="#e2e8f0" stroke-width="1.5"/>
+            <path d="M 245,56 C 248,28 300,14 350,14 C 400,14 447,33 450,56 L 450,308 C 450,357 382,381 330,378 C 275,374 245,344 245,307 Z"
+              fill="none" stroke="#e2e8f0" stroke-width="1.5"/>
+
+            <path id="lobe-RUL" class="lobe-shape" data-lobe="RUL"
+              d="M 10,56 C 10,28 62,14 112,14 C 162,14 208,33 215,56 L 215,153 L 98,164 L 28,157 L 10,131 Z"/>
+            <path id="lobe-RML" class="lobe-shape" data-lobe="RML"
+              d="M 98,164 L 215,153 L 215,215 L 94,221 Z"/>
+            <path id="lobe-RLL" class="lobe-shape" data-lobe="RLL"
+              d="M 10,131 L 28,157 L 98,164 L 94,221 L 215,215 C 215,292 188,368 128,377 C 78,381 10,355 10,308 Z"/>
+            <path id="lobe-LUL" class="lobe-shape" data-lobe="LUL"
+              d="M 245,56 C 248,28 300,14 350,14 C 400,14 447,33 450,56 L 450,217 L 362,227 L 312,233 L 245,203 Z"/>
+            <path id="lobe-LLL" class="lobe-shape" data-lobe="LLL"
+              d="M 245,203 L 312,233 L 362,227 L 450,217 C 450,292 424,364 365,375 C 310,385 250,356 245,308 Z"/>
+
+            <line class="fissure-line" x1="10"  y1="131" x2="215" y2="153"/>
+            <line class="fissure-line" x1="98"  y1="164" x2="215" y2="153"/>
+            <line class="fissure-line" x1="94"  y1="221" x2="215" y2="215"/>
+            <line class="fissure-line" x1="245" y1="203" x2="450" y2="217"/>
+
+            <text x="108" y="91"  class="lobe-label" text-anchor="middle">RUL</text>
+            <text x="163" y="193" class="lobe-label" text-anchor="middle">RML</text>
+            <text x="84"  y="296" class="lobe-label" text-anchor="middle">RLL</text>
+            <text x="372" y="126" class="lobe-label" text-anchor="middle">LUL</text>
+            <text x="355" y="310" class="lobe-label" text-anchor="middle">LLL</text>
+            <text x="112" y="390" class="lung-label">Right Lung</text>
+            <text x="348" y="390" class="lung-label">Left Lung</text>
+          </svg>
+        </div>
+
+        <div id="lobe-toggles">
+          <button class="ltog active" data-lobe="RUL"><span class="dot"></span>RUL</button>
+          <button class="ltog active" data-lobe="RML"><span class="dot"></span>RML</button>
+          <button class="ltog active" data-lobe="RLL"><span class="dot"></span>RLL</button>
+          <button class="ltog active" data-lobe="LUL"><span class="dot"></span>LUL</button>
+          <button class="ltog active" data-lobe="LLL"><span class="dot"></span>LLL</button>
+        </div>
+
+        <div class="color-legend" id="color-legend">
+          <div class="legend-title" id="legend-title"></div>
+          <div class="legend-bar"  id="legend-bar"></div>
+          <div class="legend-ticks">
+            <span id="leg-lo"></span>
+            <span id="leg-mid"></span>
+            <span id="leg-hi"></span>
+          </div>
+        </div>
+      </div><!-- /lung-panel -->
+
+      <!-- Metrics table panel -->
+      <div class="card" id="metrics-panel">
+        <h3>
+          Metrics — Frame <span id="tbl-frame">6</span>
+          <span style="font-weight:400;color:var(--muted);font-size:12px">&nbsp;(active lobes)</span>
+        </h3>
+        <div style="overflow-x:auto">
+          <table class="metrics-tbl" id="metrics-tbl">
+            <thead>
+              <tr>
+                <th style="text-align:left">Lobe</th>
+                <th>VDP %</th>
+                <th>V_hip %</th>
+                <th>VH %</th>
+                <th>MSV</th>
+                <th style="color:var(--muted)">N</th>
+              </tr>
+            </thead>
+            <tbody id="metrics-body"></tbody>
+          </table>
+        </div>
+        <div class="glossary">
+          <span>VDP</span> Ventilation Defect % — voxels with SV &lt; 30% of mean (low = good)<br>
+          <span>V_hip</span> High-Ventilation % — voxels with SV &gt; 167% of mean (compensatory)<br>
+          <span>VH</span> Ventilation Heterogeneity — IQR/mean × 100 (low = uniform)<br>
+          <span>MSV</span> Mean Specific Ventilation (divergence)
+        </div>
+      </div>
+
+    </div><!-- /row2 -->
+
+    <!-- Row 3 : VDP & V_hip trajectory + SV distribution ─── -->
+    <div class="viz-grid" style="margin-bottom:16px">
+
+      <div class="card">
+        <div class="card-header">
+          <h3>VDP &amp; V_hip Trajectory</h3>
+          <span style="font-size:11px;color:var(--muted)">per lobe across frames</span>
+        </div>
+        <div style="height:340px" id="chart-trajectory"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>SV Distribution</h3>
+          <div class="dist-ctrl">
+            <label>by</label>
+            <select id="dist-mode">
+              <option value="lobes">Lobe (at selected frame)</option>
+              <option value="frames">Frame (whole lung)</option>
+            </select>
+          </div>
+        </div>
+        <div style="height:340px" id="chart-dist"></div>
+      </div>
+
+    </div><!-- /row3 -->
+
+  </div><!-- /viz -->
+
+</div><!-- /container -->
+
+</body>
+</html>
