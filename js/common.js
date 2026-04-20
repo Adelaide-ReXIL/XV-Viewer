@@ -21,34 +21,54 @@ const METRIC_CFG = {
 };
 
 /* ── CSV parsing ─────────────────────────────────────────── */
+/*
+  Supported header variants (case-insensitive, units in parens stripped):
+
+  Frame:   "frame"                              | absent → all rows = frame 0
+  SV:      "divergence.0, 0", "divergence…"    | clinical (_final.csv)
+           "Specific Ventilation (mL/mL)"       | animal (.specificVentilation.csv)
+           "sv"                                 | generic
+  X:       "position.x", "positionx", "x", "x (mm)"
+  Y:       "position.y", "positiony", "y", "y (mm)"
+  Z:       "position.z", "positionz", "z", "z (mm)"
+*/
 function parseCSVResult(papaResult) {
   const raw = papaResult.data;
   if (!raw || raw.length < 2) return [];
 
-  // Normalize header
+  // Normalise: lowercase, strip quotes/spaces, strip (units)
   const headers = raw[0].map(h => String(h).trim()
-    .toLowerCase().replace(/["' ]/g, '').replace(/\(.*\)/, ''));
+    .toLowerCase().replace(/["' ]/g, '').replace(/\(.*?\)/g, '').trim());
 
   const fi = headers.findIndex(h => h === 'frame');
-  const si = headers.findIndex(h => h.startsWith('divergence') || h === 'sv');
+  const si = headers.findIndex(h =>
+    h.startsWith('divergence') ||
+    h === 'sv' ||
+    h.startsWith('specificventilation') ||
+    h.startsWith('specificvent'));
   const xi = headers.findIndex(h => h === 'position.x' || h === 'positionx' || h === 'x');
   const yi = headers.findIndex(h => h === 'position.y' || h === 'positiony' || h === 'y');
   const zi = headers.findIndex(h => h === 'position.z' || h === 'positionz' || h === 'z');
 
-  if ([fi, si, xi, yi, zi].some(i => i < 0)) {
+  /* SV and coordinates are required; Frame is optional (single-frame files) */
+  if ([si, xi, yi, zi].some(i => i < 0)) {
     console.warn('Header not recognised:', headers); return [];
   }
+
+  const singleFrame = fi < 0;
+  if (singleFrame) console.info('No "frame" column found — treating file as single-frame (frame 0).');
 
   const out = [];
   for (let r = 1; r < raw.length; r++) {
     const row = raw[r];
-    if (!row || row.length < 5) continue;
-    const frame = parseInt(row[fi]);
+    if (!row || row.length < 4) continue;
+    const frame = singleFrame ? 0 : parseInt(row[fi]);
     const sv    = parseFloat(row[si]);
     const x     = parseFloat(row[xi]);
     const y     = parseFloat(row[yi]);
     const z     = parseFloat(row[zi]);
-    if ([frame, sv, x, y, z].some(isNaN)) continue;
+    if ([sv, x, y, z].some(isNaN)) continue;
+    if (!singleFrame && isNaN(frame)) continue;
     out.push({ frame, sv, x, y, z });
   }
   return out;

@@ -63,6 +63,28 @@ Each metric has a `lo` (best) and `hi` (worst) hex colour in `METRIC_CFG` inside
 
 ---
 
+## CSV header detection
+
+`parseCSVResult()` in `common.js` normalises every header before matching:
+
+1. Lowercase
+2. Strip `"`, `'`, and space characters
+3. Strip anything inside parentheses (removes units like `(mL/mL)`, `(mm)`)
+
+After normalisation the column is matched:
+
+| Field | Matched when normalised header… | Required? |
+| --- | --- | --- |
+| Frame | equals `frame` | No — absent means single-frame (frame 0) |
+| SV | starts with `divergence` or `specificvent`, or equals `sv` | Yes |
+| x | equals `position.x`, `positionx`, or `x` | Yes |
+| y | equals `position.y`, `positiony`, or `y` | Yes |
+| z | equals `position.z`, `positionz`, or `z` | Yes |
+
+To support a new file format, add its normalised header pattern to the relevant `findIndex` call in `parseCSVResult()`.
+
+---
+
 ## Adding a new metric
 
 1. Add an entry to `METRIC_CFG` in `common.js`:

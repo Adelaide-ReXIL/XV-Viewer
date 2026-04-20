@@ -36,15 +36,26 @@ XV is a fluoroscopy-derived technique that measures lung ventilation from the di
 
 ## Input File Format
 
-Upload one or more `_final.csv` files. Required columns (case-insensitive, spacing flexible):
+The tool auto-detects headers — column names are matched case-insensitively and units in parentheses are stripped before matching.
 
-| Column | Accepted names |
-|--------|----------------|
-| Frame index (0-based integer) | `frame` |
-| Specific Ventilation (SV / divergence) | `divergence.0, 0`, `sv` |
-| x coordinate | `position.x`, `positionx`, `x` |
-| y coordinate | `position.y`, `positiony`, `y` |
-| z coordinate | `position.z`, `positionz`, `z` |
+### Supported header variants
+
+| Column | Accepted names | Notes |
+| --- | --- | --- |
+| Frame index | `frame`, `Frame` | Optional — absent means single-timepoint (all rows = frame 0) |
+| SV / divergence | `divergence.0, 0`, any `divergence…` | Clinical `_final.csv` |
+| SV / divergence | `Specific Ventilation (mL/mL)` | Animal `.specificVentilation.csv` |
+| SV / divergence | `sv` | Generic |
+| x coordinate | `position.x`, `positionx`, `x`, `x (mm)` | |
+| y coordinate | `position.y`, `positiony`, `y`, `y (mm)` | |
+| z coordinate | `position.z`, `positionz`, `z`, `z (mm)` | |
+
+### Known file formats
+
+| Format | Frame col | SV col | Coord cols |
+| --- | --- | --- | --- |
+| Clinical `_final.csv` | `Frame` | `divergence.0, 0` | `position.x`, `position.y`, `position.z` |
+| Animal `.specificVentilation.csv` | absent (single frame) | `Specific Ventilation (mL/mL)` | `x (mm)`, `y (mm)`, `z (mm)` |
 
 ### Upload modes
 
