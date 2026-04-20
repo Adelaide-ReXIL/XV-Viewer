@@ -64,21 +64,6 @@
           <span id="k-val" style="font-weight:700;min-width:14px">5</span>
         </div>
 
-        <div class="ctrl-group">
-          <label>Colour 3D by</label>
-          <select id="color3d-mode">
-            <option value="cluster">K-Means Cluster</option>
-            <option value="sv">SV Value (frame)</option>
-            <option value="lobe">Auto-detected Lobe</option>
-          </select>
-        </div>
-
-        <div class="ctrl-group" id="frame-ctrl-3d" style="display:none">
-          <label>Frame</label>
-          <input type="range" id="frame-slider-3d" min="0" max="6" value="6">
-          <span id="frame-val-3d" style="font-weight:700;min-width:14px">6</span>
-        </div>
-
         <button class="btn-run" id="btn-run">Run K-Means</button>
         <button class="btn-run" id="btn-sweep" style="background:var(--muted)">Sweep K (2–8)</button>
         <div id="sil-badge" style="display:none;align-items:center;gap:6px;font-size:12px;font-weight:600">
@@ -88,8 +73,6 @@
 
       </div>
 
-      <!-- Cluster colour legend -->
-      <div class="cluster-legend" id="cluster-legend" style="display:none"></div>
     </div>
 
     <!-- Silhouette sweep chart (hidden until sweep is run) -->
@@ -101,16 +84,35 @@
       <div style="height:220px" id="chart-silhouette"></div>
     </div>
 
-    <!-- Main 2-col grid -->
+    <!-- Main 2-col grid: K-Means | Explorer -->
     <div class="viz-grid" style="margin-bottom:16px">
 
-      <!-- 3D scatter -->
-      <div class="card" style="grid-column: span 2;">
+      <!-- Left: K-Means cluster scatter -->
+      <div class="card">
         <div class="card-header">
-          <h3 id="scatter-title">3D Voxel Scatter</h3>
+          <h3 id="km-scatter-title">K-Means — 3D Clusters</h3>
           <span style="font-size:11px;color:var(--muted)">Drag to rotate · Scroll to zoom</span>
         </div>
-        <div style="height:480px" id="chart-3d"></div>
+        <div style="height:420px" id="chart-km"></div>
+        <div class="cluster-legend" id="cluster-legend" style="display:none;margin-top:8px"></div>
+      </div>
+
+      <!-- Right: Explorer scatter (SV by frame / Lobes) -->
+      <div class="card">
+        <div class="card-header">
+          <h3 id="exp-title">Explorer — SV by Frame</h3>
+          <div style="display:flex;gap:4px">
+            <button class="mtab active" id="exp-sv-btn">SV / Frame</button>
+            <button class="mtab" id="exp-lobe-btn">Lobes</button>
+          </div>
+        </div>
+        <div class="frame-ctrl" id="exp-frame-ctrl" style="margin-bottom:4px">
+          <button class="btn-play" id="exp-play-btn">▶ Play</button>
+          <span>Frame</span>
+          <input type="range" id="exp-slider" min="0" max="6" value="6">
+          <span class="frame-val" id="exp-frame-val">6</span>
+        </div>
+        <div style="height:380px" id="chart-exp"></div>
       </div>
 
     </div>
@@ -239,16 +241,19 @@ function kmeanspp(pts, k) {
    APP STATE
    ============================================================ */
 const KM = {
-  uvox:     [],   // unique voxels [{x,y,z,svByFrame:{}}]
-  lobeData: {},
-  nFrames:  7,
-  k:        5,
-  labels:   null, // cluster label per unique voxel
-  kmMetric: 'vdp',
-  frame3d:  6,
-  colorMode: 'cluster',
-  label:    '',
+  uvox:        [],    // unique voxels [{x,y,z,svByFrame:{}}]
+  lobeData:    {},
+  nFrames:     7,
+  k:           5,
+  labels:      null,  // cluster label per unique voxel
+  kmMetric:    'vdp',
+  explorerMode: 'sv', // 'sv' | 'lobe'
+  explorerFrame: 6,
+  label:       '',
+  _svNorm:     null,  // Map: "x,y,z,frame" → normalised SV
 };
+
+let _expTimer = null;
 
 const CLUSTER_COLORS = ['#3b82f6','#ef4444','#10b981','#f59e0b','#8b5cf6','#06b6d4','#f97316','#ec4899'];
 const LOBE_COLORS_ARR = { RUL:'#3b82f6', RML:'#10b981', RLL:'#f59e0b', LUL:'#8b5cf6', LLL:'#ef4444', whole:'#64748b' };
@@ -285,12 +290,15 @@ function handleFiles(files) {
 }
 
 function ingest(voxels, lobeDataOverride) {
-  KM.lobeData = lobeDataOverride ?? assignLobesFromCoords(voxels);
-  KM.nFrames  = Math.max(1, new Set(voxels.map(v => v.frame)).size);
-  KM.uvox     = uniqueVoxels(voxels);
-  document.getElementById('frame-slider-3d').max   = KM.nFrames - 1;
-  document.getElementById('frame-slider-3d').value = KM.nFrames - 1;
-  KM.frame3d  = KM.nFrames - 1;
+  KM.lobeData      = lobeDataOverride ?? assignLobesFromCoords(voxels);
+  KM.nFrames       = Math.max(1, new Set(voxels.map(v => v.frame)).size);
+  KM.uvox          = uniqueVoxels(voxels);
+  KM._svNorm       = null;
+  KM.explorerFrame = KM.nFrames - 1;
+  const sl = document.getElementById('exp-slider');
+  sl.max   = KM.nFrames - 1;
+  sl.value = KM.explorerFrame;
+  document.getElementById('exp-frame-val').textContent = KM.explorerFrame;
   showInfo(voxels);
 }
 
@@ -336,116 +344,173 @@ function showSilhouetteBadge(score) {
 }
 
 function runAndRender() {
-  const feat   = document.getElementById('feat-select').value;
-  KM.k         = +document.getElementById('k-slider').value;
-  KM.colorMode = document.getElementById('color3d-mode').value;
-  KM.frame3d   = +document.getElementById('frame-slider-3d').value;
+  const feat = document.getElementById('feat-select').value;
+  KM.k       = +document.getElementById('k-slider').value;
 
   const normPts = normalise(buildFeaturePts(feat));
   KM.labels = kmeanspp(normPts, KM.k);
+  KM._svNorm = null; // invalidate cache on new data run
   showSilhouetteBadge(silhouetteScore(normPts, KM.labels, KM.k));
 
-  renderScatter3D();
+  renderClusterScatter();
   renderClusterLegend();
+  renderExplorerScatter();
   renderClusterTable();
   renderClusterTemporal();
 }
 
-/* ── 3D scatter ─────────────────────────────────────────────── */
-function renderScatter3D() {
-  const uvox = KM.uvox;
-  const mode = KM.colorMode;
-
-  let colorArr, cscale, cmin, cmax, ctitle;
-
-  /* Build a stepped colorscale that works for any K including K=2.
-     Data values are integers 0..K-1, normalised to [0,1] via cmin/cmax.
-     Each cluster occupies the band [i-0.5, i+0.5] / (K-1), clamped to [0,1]. */
-  function steppedScale(colors) {
-    const k = colors.length;
-    if (k === 1) return [[0, colors[0]], [1, colors[0]]];
-    return colors.flatMap((c, i) => {
-      const lo = i === 0     ? 0 : (i - 0.5) / (k - 1);
-      const hi = i === k - 1 ? 1 : (i + 0.5) / (k - 1);
-      return [[lo, c], [hi, c]];
-    });
-  }
-
-  if (mode === 'cluster') {
-    colorArr = KM.labels;
-    cscale   = steppedScale(CLUSTER_COLORS.slice(0, KM.k));
-    cmin = 0; cmax = KM.k - 1;
-    ctitle = 'Cluster';
-  } else if (mode === 'sv') {
-    colorArr = uvox.map(v => v.svByFrame[KM.frame3d] ?? 0);
-    cscale   = 'Viridis';
-    /* omit cmin/cmax so Plotly auto-scales */
-    ctitle = `SV (frame ${KM.frame3d})`;
-  } else {
-    const lobeNames = ['RUL','RML','RLL','LUL','LLL'];
-    const lobeOf = buildLobeIndex();
-    colorArr = uvox.map((_, i) => lobeOf[i]);
-    cscale   = steppedScale(lobeNames.map(l => LOBE_COLORS_ARR[l]));
-    cmin = 0; cmax = lobeNames.length - 1;
-    ctitle = 'Lobe';
-  }
-
-  const marker = {
-    size: 2.8, opacity: 0.8,
-    color: colorArr,
-    colorscale: cscale,
-    colorbar: { title: ctitle, thickness: 14, len: 0.6 },
-    showscale: true,
+/* ── Shared 3D scene layout ──────────────────────────────── */
+function _scene3dLayout() {
+  return {
+    paper_bgcolor: 'white',
+    scene: {
+      bgcolor: '#f8fafc',
+      xaxis: { title: 'X', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
+      yaxis: { title: 'Y', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
+      zaxis: { title: 'Z', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
+      camera: { eye: { x: 1.6, y: 1.2, z: 0.8 } },
+    },
+    margin: { l: 0, r: 0, t: 0, b: 0 },
+    legend: { x: 0, y: 1, bgcolor: 'rgba(255,255,255,0.7)', font: { size: 11 } },
   };
-  if (cmin != null) { marker.cmin = cmin; marker.cmax = cmax; }
+}
+
+const _plotOpts = { responsive: true, displayModeBar: true, displaylogo: false,
+                    modeBarButtonsToRemove: ['toImage'] };
+
+/* ── Left: K-Means cluster scatter ──────────────────────── */
+function renderClusterScatter() {
+  if (!KM.labels) return;
+  const uvox = KM.uvox;
+
+  /* Stepped colorscale — works for any K ≥ 2 */
+  const k = KM.k;
+  const cscale = CLUSTER_COLORS.slice(0, k).flatMap((c, i) => {
+    const lo = i === 0     ? 0 : (i - 0.5) / (k - 1);
+    const hi = i === k - 1 ? 1 : (i + 0.5) / (k - 1);
+    return [[lo, c], [hi, c]];
+  });
 
   const trace = {
     type: 'scatter3d', mode: 'markers',
     x: uvox.map(v => v.x), y: uvox.map(v => v.y), z: uvox.map(v => v.z),
-    marker,
+    marker: {
+      size: 2.8, opacity: 0.8,
+      color: KM.labels,
+      colorscale: cscale, cmin: 0, cmax: k - 1,
+      colorbar: { thickness: 14, len: 0.5, tickvals: Array.from({length:k},(_,i)=>i),
+                  ticktext: Array.from({length:k},(_,i)=>`C${i+1}`) },
+      showscale: true,
+    },
     hovertemplate: 'x:%{x:.1f} y:%{y:.1f} z:%{z:.1f}<extra></extra>',
   };
 
-  document.getElementById('scatter-title').textContent =
-    mode === 'cluster' ? `3D Voxel Scatter — K=${KM.k} Clusters`
-    : mode === 'sv'    ? `3D Voxel Scatter — SV at Frame ${KM.frame3d}`
-    :                    '3D Voxel Scatter — Auto-detected Lobes';
-
-  Plotly.react('chart-3d', [trace], {
-    paper_bgcolor: 'white',
-    scene: {
-      bgcolor: '#f8fafc',
-      xaxis: { title: 'X', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0' },
-      yaxis: { title: 'Y', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0' },
-      zaxis: { title: 'Z', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0' },
-      camera: { eye: { x: 1.6, y: 1.2, z: 0.8 } },
-    },
-    margin: { l: 0, r: 0, t: 0, b: 0 },
-  }, { responsive: true, displayModeBar: true, displaylogo: false,
-    modeBarButtonsToRemove: ['toImage'] });
+  document.getElementById('km-scatter-title').textContent = `K-Means — K=${k} Clusters`;
+  Plotly.react('chart-km', [trace], _scene3dLayout(), _plotOpts);
 }
 
-/* Map each uvox index → lobe index (0-4) */
-function buildLobeIndex() {
-  const lobeNames = ['RUL','RML','RLL','LUL','LLL'];
-  const idx = new Array(KM.uvox.length).fill(2);
-  lobeNames.forEach((lobe, li) => {
-    const pts = (KM.lobeData[lobe] || []).filter(v => v.frame === 0);
-    const keys = new Set(pts.map(v => `${v.x},${v.y},${v.z}`));
-    KM.uvox.forEach((uv, i) => { if (keys.has(`${uv.x},${uv.y},${uv.z}`)) idx[i] = li; });
-  });
-  return idx;
-}
-
-/* ── Cluster legend pills ─────────────────────────────────── */
+/* ── Cluster legend pills ────────────────────────────────── */
 function renderClusterLegend() {
-  if (KM.colorMode !== 'cluster') { document.getElementById('cluster-legend').style.display = 'none'; return; }
   const leg = document.getElementById('cluster-legend');
+  if (!KM.labels) { leg.style.display = 'none'; return; }
   leg.style.display = 'flex';
   leg.innerHTML = Array.from({ length: KM.k }, (_, ki) => {
     const n = KM.labels.filter(l => l === ki).length;
     return `<span class="cl-pill"><span class="cl-dot" style="background:${CLUSTER_COLORS[ki]}"></span>Cluster ${ki+1} (${n})</span>`;
   }).join('');
+}
+
+/* ── Right: Explorer scatter ─────────────────────────────── */
+
+/* Build normalised SV lookup once per data load */
+function _buildSvNorm() {
+  const all = KM.uvox;
+  const finite = all.flatMap(v => Object.values(v.svByFrame)).filter(isFinite);
+  const mean = finite.length ? finite.reduce((a,b)=>a+b,0)/finite.length : 1;
+  const map = new Map();
+  all.forEach(v => {
+    for (const [f, sv] of Object.entries(v.svByFrame))
+      map.set(`${v.x},${v.y},${v.z},${f}`, sv / mean);
+  });
+  return map;
+}
+
+function renderExplorerScatter() {
+  const uvox = KM.uvox;
+  if (!uvox.length) return;
+
+  if (KM.explorerMode === 'lobe') {
+    /* One trace per lobe — Plotly renders a named legend automatically */
+    const lobeNames = ['RUL','RML','RLL','LUL','LLL'];
+    const lobeKeys  = new Map(); // lobe → Set of "x,y,z" keys
+    lobeNames.forEach(lobe => {
+      const pts = (KM.lobeData[lobe] || []).filter(v => v.frame === 0);
+      lobeKeys.set(lobe, new Set(pts.map(v => `${v.x},${v.y},${v.z}`)));
+    });
+
+    const traces = lobeNames.map(lobe => {
+      const vv = uvox.filter(v => lobeKeys.get(lobe).has(`${v.x},${v.y},${v.z}`));
+      return {
+        type: 'scatter3d', mode: 'markers',
+        name: LOBE_META[lobe]?.label ?? lobe,
+        x: vv.map(v=>v.x), y: vv.map(v=>v.y), z: vv.map(v=>v.z),
+        marker: { size: 2.8, opacity: 0.85, color: LOBE_COLORS_ARR[lobe] },
+        hovertemplate: `<b>${LOBE_META[lobe]?.label ?? lobe}</b><br>x:%{x:.1f} y:%{y:.1f} z:%{z:.1f}<extra></extra>`,
+      };
+    });
+
+    document.getElementById('exp-title').textContent = 'Explorer — Lobes';
+    document.getElementById('exp-frame-ctrl').style.display = 'none';
+    Plotly.react('chart-exp', traces, _scene3dLayout(), _plotOpts);
+
+  } else {
+    /* SV by frame — single Viridis trace, camera-preserving on frame change */
+    if (!KM._svNorm) KM._svNorm = _buildSvNorm();
+    const f = KM.explorerFrame;
+    const colors = uvox.map(v => KM._svNorm.get(`${v.x},${v.y},${v.z},${f}`) ?? 0);
+
+    const trace = {
+      type: 'scatter3d', mode: 'markers',
+      x: uvox.map(v=>v.x), y: uvox.map(v=>v.y), z: uvox.map(v=>v.z),
+      marker: {
+        size: 2.8, opacity: 0.8, color: colors,
+        colorscale: 'Viridis', cmin: 0, cmax: 3,
+        colorbar: { title: { text: 'Norm. SV', side: 'right' }, thickness: 14, len: 0.6,
+                    tickvals: [0,1,2,3], ticktext: ['0','1× mean','2×','3×'] },
+        showscale: true,
+      },
+      hovertemplate: 'x:%{x:.1f} y:%{y:.1f} z:%{z:.1f}<br>Norm. SV:%{marker.color:.3f}<extra></extra>',
+    };
+
+    document.getElementById('exp-title').textContent = `Explorer — SV at Frame ${f}`;
+    document.getElementById('exp-frame-ctrl').style.display = 'flex';
+    Plotly.react('chart-exp', [trace], _scene3dLayout(), _plotOpts);
+  }
+}
+
+function _expUpdateColors(frame) {
+  if (!KM._svNorm) return;
+  const colors = KM.uvox.map(v => KM._svNorm.get(`${v.x},${v.y},${v.z},${frame}`) ?? 0);
+  Plotly.restyle('chart-exp', { 'marker.color': [colors] }, [0]);
+  document.getElementById('exp-title').textContent = `Explorer — SV at Frame ${frame}`;
+}
+
+function _expSetFrame(f) {
+  KM.explorerFrame = f;
+  document.getElementById('exp-slider').value = f;
+  document.getElementById('exp-frame-val').textContent = f;
+  _expUpdateColors(f);
+}
+
+function _expStartPlay() {
+  if (_expTimer) return;
+  document.getElementById('exp-play-btn').textContent = '⏸ Pause';
+  _expTimer = setInterval(() => _expSetFrame((KM.explorerFrame + 1) % KM.nFrames), 600);
+}
+
+function _expStopPlay() {
+  clearInterval(_expTimer); _expTimer = null;
+  document.getElementById('exp-play-btn').textContent = '▶ Play';
 }
 
 /* ── Cluster metrics table ────────────────────────────────── */
@@ -563,16 +628,30 @@ document.getElementById('btn-sweep').addEventListener('click', sweepSilhouette);
 document.getElementById('k-slider').addEventListener('input', e =>
   document.getElementById('k-val').textContent = e.target.value);
 
-document.getElementById('color3d-mode').addEventListener('change', e => {
-  const showFrame = e.target.value === 'sv';
-  document.getElementById('frame-ctrl-3d').style.display = showFrame ? 'flex' : 'none';
-  if (KM.labels) renderScatter3D(), renderClusterLegend();
+/* Explorer mode toggle */
+document.getElementById('exp-sv-btn').addEventListener('click', () => {
+  KM.explorerMode = 'sv';
+  document.getElementById('exp-sv-btn').classList.add('active');
+  document.getElementById('exp-lobe-btn').classList.remove('active');
+  renderExplorerScatter();
+});
+document.getElementById('exp-lobe-btn').addEventListener('click', () => {
+  _expStopPlay();
+  KM.explorerMode = 'lobe';
+  document.getElementById('exp-lobe-btn').classList.add('active');
+  document.getElementById('exp-sv-btn').classList.remove('active');
+  renderExplorerScatter();
 });
 
-document.getElementById('frame-slider-3d').addEventListener('input', e => {
-  KM.frame3d = +e.target.value;
-  document.getElementById('frame-val-3d').textContent = KM.frame3d;
-  if (KM.labels) renderScatter3D();
+/* Explorer frame slider */
+document.getElementById('exp-slider').addEventListener('input', e => {
+  _expStopPlay();
+  _expSetFrame(+e.target.value);
+});
+
+/* Explorer play button */
+document.getElementById('exp-play-btn').addEventListener('click', () => {
+  if (_expTimer) _expStopPlay(); else _expStartPlay();
 });
 
 document.getElementById('km-metric-tabs').addEventListener('click', e => {
