@@ -210,18 +210,22 @@ function normalise(pts) {
   }));
 }
 
-function kmeanspp(pts, k) {
-  if (pts.length <= k) return pts.map((_, i) => i % k);
+/* Single K-means++ run — returns { labels, inertia, centroids } */
+function _kmeansOnce(pts, k) {
+  if (pts.length <= k) return { labels: pts.map((_, i) => i % k), inertia: 0 };
+
+  /* K-means++ initialisation */
   const cents = [pts[Math.floor(Math.random() * pts.length)]];
   while (cents.length < k) {
     const dists = pts.map(p => Math.min(...cents.map(c => sqDist(p, c))));
-    let r = Math.random() * dists.reduce((a,b) => a+b, 0), i = 0;
+    let r = Math.random() * dists.reduce((a, b) => a + b, 0), i = 0;
     for (; i < dists.length - 1 && (r -= dists[i]) > 0; i++);
     cents.push([...pts[i]]);
   }
 
+  /* Lloyd iterations */
   let labels = new Array(pts.length).fill(0);
-  for (let iter = 0; iter < 120; iter++) {
+  for (let iter = 0; iter < 300; iter++) {
     const newL = pts.map(p => {
       let mi = 0, md = Infinity;
       cents.forEach((c, ki) => { const d = sqDist(p, c); if (d < md) { md = d; mi = ki; } });
@@ -231,11 +235,32 @@ function kmeanspp(pts, k) {
     labels = newL;
     for (let ki = 0; ki < k; ki++) {
       const cl = pts.filter((_, i) => labels[i] === ki);
-      if (!cl.length) continue;
-      cents[ki] = pts[0].map((_, j) => cl.reduce((s, p) => s + p[j], 0) / cl.length);
+      /* Empty cluster: reassign the point farthest from its centroid */
+      if (!cl.length) {
+        const fi = pts.reduce((best, p, i) => {
+          const d = sqDist(p, cents[labels[i]]);
+          return d > best.d ? { i, d } : best;
+        }, { i: 0, d: -1 }).i;
+        labels[fi] = ki;
+        cents[ki] = [...pts[fi]];
+      } else {
+        cents[ki] = pts[0].map((_, j) => cl.reduce((s, p) => s + p[j], 0) / cl.length);
+      }
     }
   }
-  return labels;
+
+  const inertia = pts.reduce((s, p, i) => s + sqDist(p, cents[labels[i]]), 0);
+  return { labels, inertia };
+}
+
+/* n_init=10 restarts — keeps the run with lowest inertia, matching sklearn default */
+function kmeanspp(pts, k, nInit = 10) {
+  let best = null;
+  for (let i = 0; i < nInit; i++) {
+    const run = _kmeansOnce(pts, k);
+    if (!best || run.inertia < best.inertia) best = run;
+  }
+  return best.labels;
 }
 
 /* ============================================================
