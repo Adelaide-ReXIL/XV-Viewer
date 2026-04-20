@@ -60,8 +60,8 @@
 
         <div class="ctrl-group">
           <label>K =</label>
-          <input type="range" id="k-slider" min="2" max="8" value="5">
-          <span id="k-val" style="font-weight:700;min-width:14px">5</span>
+          <input type="range" id="k-slider" min="2" max="8" value="2">
+          <span id="k-val" style="font-weight:700;min-width:14px">2</span>
         </div>
 
         <button class="btn-run" id="btn-run">Run K-Means</button>
@@ -113,6 +113,7 @@
           <span class="frame-val" id="exp-frame-val">6</span>
         </div>
         <div style="height:380px" id="chart-exp"></div>
+        <div class="cluster-legend" id="lobe-legend" style="display:none;margin-top:8px"></div>
       </div>
 
     </div>
@@ -244,7 +245,7 @@ const KM = {
   uvox:        [],    // unique voxels [{x,y,z,svByFrame:{}}]
   lobeData:    {},
   nFrames:     7,
-  k:           5,
+  k:           2,
   labels:      null,  // cluster label per unique voxel
   kmMetric:    'vdp',
   explorerMode: 'sv', // 'sv' | 'lobe'
@@ -364,6 +365,7 @@ function _scene3dLayout() {
   return {
     paper_bgcolor: 'white',
     scene: {
+      uirevision: 'locked',   // preserves camera rotation/zoom between re-renders
       bgcolor: '#f8fafc',
       xaxis: { title: 'X', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
       yaxis: { title: 'Y', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
@@ -453,17 +455,31 @@ function renderExplorerScatter() {
       return {
         type: 'scatter3d', mode: 'markers',
         name: LOBE_META[lobe]?.label ?? lobe,
+        showlegend: false,
         x: vv.map(v=>v.x), y: vv.map(v=>v.y), z: vv.map(v=>v.z),
         marker: { size: 2.8, opacity: 0.85, color: LOBE_COLORS_ARR[lobe] },
         hovertemplate: `<b>${LOBE_META[lobe]?.label ?? lobe}</b><br>x:%{x:.1f} y:%{y:.1f} z:%{z:.1f}<extra></extra>`,
       };
     });
 
+    /* HTML pill legend — dot size independent of scatter dot size */
+    const lobeLeg = document.getElementById('lobe-legend');
+    lobeLeg.style.display = 'flex';
+    lobeLeg.innerHTML = lobeNames.map(lobe =>
+      `<span class="cl-pill">
+        <span class="cl-dot" style="background:${LOBE_COLORS_ARR[lobe]}"></span>
+        ${LOBE_META[lobe]?.label ?? lobe}
+      </span>`
+    ).join('');
+
     document.getElementById('exp-title').textContent = 'Explorer — Lobes';
     document.getElementById('exp-frame-ctrl').style.display = 'none';
-    Plotly.react('chart-exp', traces, _scene3dLayout(), _plotOpts);
+    const lobeLayout = { ..._scene3dLayout(), showlegend: false };
+    Plotly.react('chart-exp', traces, lobeLayout, _plotOpts);
 
   } else {
+    document.getElementById('lobe-legend').style.display = 'none';
+
     /* SV by frame — single Viridis trace, camera-preserving on frame change */
     if (!KM._svNorm) KM._svNorm = _buildSvNorm();
     const f = KM.explorerFrame;

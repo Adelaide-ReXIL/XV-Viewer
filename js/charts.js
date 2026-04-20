@@ -234,6 +234,7 @@ function _scatter3dLayout() {
   return {
     paper_bgcolor: 'white',
     scene: {
+      uirevision: 'locked',   // preserves camera rotation/zoom between re-renders
       bgcolor: '#f8fafc',
       xaxis: { title: 'X', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
       yaxis: { title: 'Y', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
