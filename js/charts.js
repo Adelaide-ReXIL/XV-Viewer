@@ -236,10 +236,10 @@ function _scatter3dLayout() {
     scene: {
       uirevision: 'locked',   // preserves camera rotation/zoom between re-renders
       bgcolor: '#f8fafc',
-      xaxis: { title: 'X', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
+      xaxis: { title: '← R  |  L →', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
       yaxis: { title: 'Y', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
-      zaxis: { title: 'Z', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false },
-      camera: { eye: { x: 1.5, y: 1.0, z: 0.8 } },
+      zaxis: { title: 'Z', backgroundcolor: '#f1f5f9', gridcolor: '#e2e8f0', showspikes: false, autorange: 'reversed' },
+      camera: { eye: { x: 0.2, y: -2.0, z: 0.5 } },  // anterior view: y<0 = looking from front
     },
     margin: { l: 0, r: 0, t: 0, b: 0 },
     font: { family: 'system-ui, sans-serif', size: 12 },
