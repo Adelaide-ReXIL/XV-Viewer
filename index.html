@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>XV Viewer — X-ray Velocimetry Dashboard</title>
+  <title>XV Viewer: X-ray Velocimetry Dashboard</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -29,8 +29,8 @@
   <!-- ── Upload ── -->
   <section class="upload-section">
     <h2>X-ray Velocimetry Clinical Dashboard</h2>
-    <p>Visualise how ventilation (XV) values evolve across breath frames — per lung lobe.
-       Upload <code>_final.csv</code> file(s), or explore the built-in examples.</p>
+    <p>Visualise how ventilation (XV) values evolve across breath frames, per lung lobe.
+       Upload a <code>_final.csv</code>, a set of per-frame CSVs, or explore the built-in examples.</p>
     <div class="example-btns">
       <button class="btn-example" onclick="loadExample('cf')">▶ CF Patient Example</button>
       <button class="btn-example" onclick="loadExample('ctrl')">▶ Healthy Control Example</button>
@@ -38,10 +38,12 @@
     <div class="drop-zone" id="drop-zone">
       <input type="file" id="file-input" multiple accept=".csv">
       <div class="dz-icon">📂</div>
-      <div class="dz-title">Drop <code>_final.csv</code> files here or click to browse</div>
+      <div class="dz-title">Drop CSV files here or click to browse</div>
       <div class="dz-sub">
-        Upload a single whole-lung file <em>or</em> multiple lobar files (filenames containing
-        RUL / RML / RLL / LUL / LLL). A whole-lung file is auto-segmented into lobes.
+        A single whole-lung file (<code>_final.csv</code>), <em>or</em> one CSV per frame
+        (e.g. <code>…pp.00.csv</code> … <code>…pp.04.csv</code>; frame order is read from the
+        filename), <em>or</em> lobar files (filenames containing RUL / RML / RLL / LUL / LLL).
+        Whole-lung data is auto-segmented into lobes.
       </div>
     </div>
   </section>
@@ -54,7 +56,7 @@
     <!-- Row 1 : 3D SV scatter (full width) ───────────────── -->
     <div class="card" style="margin-bottom:16px">
       <div class="card-header">
-        <h3>3D Voxel Scatter — SV at Frame <span id="scatter-frame-label">6</span></h3>
+        <h3>3D Voxel Scatter: SV at Frame <span id="scatter-frame-label">6</span></h3>
         <span style="font-size:11px;color:var(--muted)">
           Each dot = one voxel &nbsp;·&nbsp; colour = SV value &nbsp;·&nbsp; drag to rotate
         </span>
@@ -66,7 +68,7 @@
         <span>Frame</span>
         <input type="range" id="scatter-slider" min="0" max="6" value="6">
         <span class="frame-val" id="scatter-frame-val">6</span>
-        <span style="color:var(--muted);font-size:11px">(0 = start of inspiration → 6 = end)</span>
+        <span id="scatter-frame-hint" style="color:var(--muted);font-size:11px">(0 = start of inspiration → 6 = end)</span>
       </div>
 
       <div style="height:500px" id="chart-3d"></div>
@@ -87,7 +89,7 @@
           </div>
         </div>
 
-        <!-- SVG lung — anatomical anterior view (patient's right = viewer's left) -->
+        <!-- SVG lung: anatomical anterior view (patient's right = viewer's left) -->
         <div id="lung-svg-wrap">
           <svg id="lung-svg" viewBox="0 0 460 392" xmlns="http://www.w3.org/2000/svg">
             <path d="M 10,56 C 10,28 62,14 112,14 C 162,14 208,33 215,56 L 215,307 C 215,344 185,374 130,378 C 78,381 10,357 10,308 Z"
@@ -137,13 +139,28 @@
             <span id="leg-mid"></span>
             <span id="leg-hi"></span>
           </div>
+          <div class="range-ctrl">
+            <label for="range-mode">Colour range</label>
+            <select id="range-mode">
+              <option value="auto">Auto (fit to loaded data)</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input type="number" id="range-min" step="any" aria-label="Colour range minimum">
+            <span>to</span>
+            <input type="number" id="range-max" step="any" aria-label="Colour range maximum">
+            <span id="range-unit"></span>
+          </div>
+          <p class="range-hint">Auto runs from 0 to just above the highest value (any lobe, any frame) of whichever
+            dataset is loaded, so the same colour can mean different values in different datasets. To compare datasets,
+            choose Custom and keep the same range; values outside it take the end colour.</p>
         </div>
+        <p class="lobe-note" id="lobe-note"></p>
       </div><!-- /lung-panel -->
 
       <!-- Metrics table panel -->
       <div class="card" id="metrics-panel">
         <h3>
-          Metrics — Frame <span id="tbl-frame">6</span>
+          Metrics at Frame <span id="tbl-frame">6</span>
           <span style="font-weight:400;color:var(--muted);font-size:12px">&nbsp;(active lobes)</span>
         </h3>
         <div style="overflow-x:auto">
@@ -162,9 +179,10 @@
           </table>
         </div>
         <div class="glossary">
-          <span>VDP</span> Ventilation Defect % — voxels with SV &lt; 30% of mean (low = good)<br>
-          <span>V_hip</span> High-Ventilation % — voxels with SV &gt; 167% of mean<br>
-          <span>VH</span> Ventilation Heterogeneity — IQR/mean × 100 (low = uniform)<br>
+          <span>VDP</span> Ventilation Defect %: voxels with SV &lt; 60% of the whole-lung mean (low = good)<br>
+          <span>V_hip</span> High-Ventilation %: voxels with SV &gt; 167% of the whole-lung mean<br>
+          <em>Lobes use the same whole-lung mean of that frame, so lobar VDP / V_hip add up to the whole-lung value.</em><br>
+          <span>VH</span> Ventilation Heterogeneity: IQR/mean × 100 (low = uniform)<br>
           <span>MSV</span> Mean Specific Ventilation (divergence)
         </div>
       </div>

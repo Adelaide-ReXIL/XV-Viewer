@@ -1,4 +1,4 @@
-# XV Viewer — Developer Architecture Notes
+# XV Viewer: Developer Architecture Notes
 
 ## Data flow
 
@@ -6,7 +6,9 @@
 CSV file(s)
     │
     ▼
-PapaParse → parseCSVResult()        # raw [{frame,sv,x,y,z}]
+loadCSVFiles()                      # common.js, shared by both pages
+  PapaParse → parseCSVMeta()        #   raw [{frame,sv,x,y,z}] + hasFrame per file
+  frame-less files, >1 per lobe     #   frame ← frameKeyFromName(filename), re-indexed 0…N-1
     │
     ▼
 normalizeVoxels()                   # sv = sv / globalMean
@@ -26,7 +28,7 @@ APP.lobeData / APP.metrics          # global state
 renderAll()                         # initial full render
 ```
 
-On every frame slider change: `renderOnFrameChange()` (fast path — skips trajectory rebuild).
+On every frame slider change: `renderOnFrameChange()` (fast path; skips trajectory rebuild).
 
 ---
 
@@ -53,13 +55,21 @@ The full voxel array (all frames) can be large. To keep Plotly responsive:
 1. **Subsample once** at `initScatter3D()`: keep every N-th voxel from frame 0 so the point count stays ≤ 3 000. Cache these as `_scatter3dPts`.
 2. On frame change, build an `(x,y,z) → sv` map for that frame and remap colours with `Plotly.restyle`. The coordinates never change so Plotly does not re-layout the scene and the camera angle is preserved.
 
-If you need higher fidelity, increase the `3000` cap in `initScatter3D()` — it trades render speed for detail.
+If you need higher fidelity, increase the `3000` cap in `initScatter3D()`; it trades render speed for detail.
 
 ---
 
 ## Metric colour scale
 
-Each metric has a `lo` (best) and `hi` (worst) hex colour in `METRIC_CFG` inside `common.js`. `metricToColor(val, metric)` linearly interpolates between them using the metric's `[min, max]` range. Out-of-range values are clamped. `null` / non-finite values render as a neutral grey (`#cbd5e1`).
+Each metric has a `lo` (best) and `hi` (worst) hex colour in `METRIC_CFG` inside `common.js`. `metricToColor(val, metric, active, range)` linearly interpolates between them over `range = [min, max]`. Out-of-range values are clamped. `null` / non-finite values render as a neutral grey (`#cbd5e1`).
+
+The range is not fixed, because different datasets (species, acquisitions, units) have very different values:
+
+- **Dashboard, Auto (default):** `niceRange()` runs from 0 to just above the highest value of that metric over every lobe and frame of the loaded data, rounded to a clean number. It is computed once per load (`_computeAutoRanges()` in `app.js`), so colours stay stable while frames play.
+- **Dashboard, Custom:** the user sets `[min, max]` per metric under the legend. It is saved in `localStorage` (`xv-viewer.colorRange`), so several datasets can be viewed on one scale.
+- **K-means cluster table:** `niceRange()` over the cluster values on screen.
+
+`METRIC_CFG.min/max` is only a fallback when there is no data.
 
 ---
 
@@ -75,7 +85,7 @@ After normalisation the column is matched:
 
 | Field | Matched when normalised header… | Required? |
 | --- | --- | --- |
-| Frame | equals `frame` | No — absent means single-frame (frame 0) |
+| Frame | equals `frame` | No. If absent, the file is one frame: frame 0, or, when several such files are loaded together, the number in the filename (`frameKeyFromName()`) |
 | SV | starts with `divergence` or `specificvent`, or equals `sv` | Yes |
 | x | equals `position.x`, `positionx`, or `x` | Yes |
 | y | equals `position.y`, `positiony`, or `y` | Yes |

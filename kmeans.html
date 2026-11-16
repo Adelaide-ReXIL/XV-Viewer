@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>XV Viewer — K-Means View</title>
+  <title>XV Viewer: K-Means View</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -24,7 +24,7 @@
 
   <!-- ── Upload (same as index) ── -->
   <section class="upload-section">
-    <h2>Voxel Grouping — K-Means View</h2>
+    <h2>Voxel Grouping: K-Means View</h2>
     <p>Cluster lung voxels by spatial location, functional ventilation behaviour, or both.
        Explore which regions move together and compare cluster-level XV metrics.</p>
 
@@ -36,8 +36,9 @@
     <div class="drop-zone" id="drop-zone">
       <input type="file" id="file-input" multiple accept=".csv">
       <div class="dz-icon">📂</div>
-      <div class="dz-title">Drop <code>_final.csv</code> file(s) here</div>
-      <div class="dz-sub">Whole-lung or lobar CSVs accepted.</div>
+      <div class="dz-title">Drop CSV file(s) here</div>
+      <div class="dz-sub">Whole-lung <code>_final.csv</code>, one CSV per frame (e.g. <code>…pp.00.csv</code> …
+        <code>…pp.04.csv</code>), or lobar CSVs accepted.</div>
     </div>
   </section>
 
@@ -65,7 +66,7 @@
         </div>
 
         <button class="btn-run" id="btn-run">Run K-Means</button>
-        <button class="btn-run" id="btn-sweep" style="background:var(--muted)">Sweep K (2–8)</button>
+        <button class="btn-run" id="btn-sweep" style="background:var(--muted)">Sweep K (2 to 8)</button>
         <div id="sil-badge" style="display:none;align-items:center;gap:6px;font-size:12px;font-weight:600">
           <span style="color:var(--muted)">Silhouette:</span>
           <span id="sil-score" style="padding:3px 10px;border-radius:100px;font-size:13px"></span>
@@ -90,7 +91,7 @@
       <!-- Left: K-Means cluster scatter -->
       <div class="card">
         <div class="card-header">
-          <h3 id="km-scatter-title">K-Means — 3D Clusters</h3>
+          <h3 id="km-scatter-title">K-Means: 3D Clusters</h3>
           <span style="font-size:11px;color:var(--muted)">Drag to rotate · Scroll to zoom</span>
         </div>
         <div style="height:420px" id="chart-km"></div>
@@ -100,7 +101,7 @@
       <!-- Right: Explorer scatter (SV by frame / Lobes) -->
       <div class="card">
         <div class="card-header">
-          <h3 id="exp-title">Explorer — SV by Frame</h3>
+          <h3 id="exp-title">Explorer: SV by Frame</h3>
           <div style="display:flex;gap:4px">
             <button class="mtab active" id="exp-sv-btn">SV / Frame</button>
             <button class="mtab" id="exp-lobe-btn">Lobes</button>
@@ -114,6 +115,7 @@
         </div>
         <div style="height:380px" id="chart-exp"></div>
         <div class="cluster-legend" id="lobe-legend" style="display:none;margin-top:8px"></div>
+        <p class="lobe-note" id="lobe-note" style="display:none"></p>
       </div>
 
     </div>
@@ -163,7 +165,7 @@ function sqDist(a, b) {
   return a.reduce((s, v, i) => s + (v - b[i]) ** 2, 0);
 }
 
-/* Silhouette score — subsampled to MAX_S points for performance.
+/* Silhouette score, subsampled to MAX_S points for performance.
    Returns a value in [-1, 1]; higher = better cluster separation. */
 function silhouetteScore(pts, labels, k, MAX_S = 600) {
   let idxs = Array.from({ length: pts.length }, (_, i) => i);
@@ -210,7 +212,7 @@ function normalise(pts) {
   }));
 }
 
-/* Single K-means++ run — returns { labels, inertia, centroids } */
+/* Single K-means++ run; returns { labels, inertia, centroids } */
 function _kmeansOnce(pts, k) {
   if (pts.length <= k) return { labels: pts.map((_, i) => i % k), inertia: 0 };
 
@@ -253,7 +255,7 @@ function _kmeansOnce(pts, k) {
   return { labels, inertia };
 }
 
-/* n_init=10 restarts — keeps the run with lowest inertia, matching sklearn default */
+/* n_init=10 restarts; keeps the run with lowest inertia, matching sklearn default */
 function kmeanspp(pts, k, nInit = 10) {
   let best = null;
   for (let i = 0; i < nInit; i++) {
@@ -276,6 +278,7 @@ const KM = {
   explorerMode: 'sv', // 'sv' | 'lobe'
   explorerFrame: 6,
   label:       '',
+  load:        null,  // loadCSVFiles() result for the current upload (null for examples)
   _svNorm:     null,  // Map: "x,y,z,frame" → normalised SV
 };
 
@@ -287,35 +290,39 @@ const LOBE_COLORS_ARR = { RUL:'#3b82f6', RML:'#10b981', RLL:'#f59e0b', LUL:'#8b5
 /* ============================================================
    LOAD
    ============================================================ */
+let _loadSeq = 0;
+
 function loadExample(type) {
+  _loadSeq++;   // drop any upload still being parsed
   KM.label = type === 'cf' ? 'CF Patient (example)' : 'Healthy Control (example)';
+  KM.load  = null;
   const voxels = parseRawArray(type === 'cf' ? SAMPLE_CF : SAMPLE_CTRL);
   ingest(voxels);
 }
 
-function handleFiles(files) {
+/* One or more CSVs: a _final.csv, per-frame files (…pp.00.csv … pp.04.csv)
+   or lobar files; see loadCSVFiles() in common.js */
+async function handleFiles(files) {
   const fa = [...files];
-  const hasLobe = fa.some(f => detectLobeFromName(f.name));
-  KM.label = fa[0].name.replace(/_final\.csv$/i, '');
-
-  if (hasLobe) {
-    const pending = { n: fa.length }, tmp = {};
-    fa.forEach(f => {
-      const lobe = detectLobeFromName(f.name) || 'whole';
-      Papa.parse(f, {
-        complete(r) { tmp[lobe] = parseCSVResult(r); if (--pending.n === 0) ingestLobar(tmp); },
-        skipEmptyLines: true
-      });
-    });
-  } else {
-    Papa.parse(fa[0], {
-      complete(r) { ingest(parseCSVResult(r)); },
-      skipEmptyLines: true
-    });
+  if (!fa.length) return;
+  const seq = ++_loadSeq;
+  renderLoadStatus(fa.length);
+  try {
+    const res = await loadCSVFiles(fa);
+    if (seq !== _loadSeq) return;   // superseded by a newer upload
+    KM.label = res.label;
+    KM.load  = res;
+    if (res.isLobar) ingestLobar(res.lobeMap); else ingest(res.voxels);
+  } catch (err) {
+    if (seq !== _loadSeq) return;
+    console.error(err);
+    _expStopPlay();
+    renderLoadError(err);
   }
 }
 
 function ingest(voxels, lobeDataOverride) {
+  KM.isLobar       = !!lobeDataOverride;   // lobes from filenames rather than coordinates
   KM.lobeData      = lobeDataOverride ?? assignLobesFromCoords(voxels);
   KM.nFrames       = Math.max(1, new Set(voxels.map(v => v.frame)).size);
   KM.uvox          = uniqueVoxels(voxels);
@@ -336,9 +343,11 @@ function ingestLobar(lobeMap) {
 function showInfo(voxels) {
   const info = document.getElementById('data-info');
   info.hidden = false;
-  info.innerHTML = `<strong>${KM.label}</strong>
+  info.className = '';
+  info.innerHTML = `<strong>${escapeHTML(KM.label)}</strong>
     <span class="info-pill">Frames: ${KM.nFrames}</span>
-    <span class="info-pill">Unique voxels: ${KM.uvox.length.toLocaleString()}</span>`;
+    <span class="info-pill">Unique voxels: ${KM.uvox.length.toLocaleString()}</span>` +
+    loadDetailsHTML(KM.load);
   document.getElementById('viz').hidden = false;
   runAndRender();
 }
@@ -346,11 +355,29 @@ function showInfo(voxels) {
 /* ============================================================
    K-MEANS + RENDER
    ============================================================ */
+/* SV per frame for one voxel. A frame with no value for this voxel (per-frame files
+   need not share one voxel set) is filled by linear interpolation between the nearest
+   frames that have one, or copied from the nearest frame at the start/end of the series. */
+function svSeries(v, nFrames) {
+  const s = Array.from({ length: nFrames }, (_, f) => v.svByFrame[f]);
+  const known = [];
+  s.forEach((x, f) => { if (x != null) known.push(f); });
+  if (known.length === nFrames) return s;
+  if (!known.length) return s.map(() => 0);
+  return s.map((x, f) => {
+    if (x != null) return x;
+    let lo = -1, hi = -1;
+    for (const k of known) { if (k < f) lo = k; else if (hi < 0) hi = k; }
+    if (lo < 0) return s[hi];
+    if (hi < 0) return s[lo];
+    return s[lo] + (s[hi] - s[lo]) * (f - lo) / (hi - lo);
+  });
+}
+
 function buildFeaturePts(feat) {
   return KM.uvox.map(v => {
     if (feat === 'spatial') return [v.x, v.y, v.z];
-    if (feat === 'functional')
-      return Array.from({ length: KM.nFrames }, (_, f) => v.svByFrame[f] ?? 0);
+    if (feat === 'functional') return svSeries(v, KM.nFrames);
     /* combined */
     const vals = Object.values(v.svByFrame);
     const meanSV = vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length);
@@ -410,7 +437,7 @@ function renderClusterScatter() {
   if (!KM.labels) return;
   const uvox = KM.uvox;
 
-  /* Stepped colorscale — works for any K ≥ 2 */
+  /* Stepped colorscale; works for any K ≥ 2 */
   const k = KM.k;
   const cscale = CLUSTER_COLORS.slice(0, k).flatMap((c, i) => {
     const lo = i === 0     ? 0 : (i - 0.5) / (k - 1);
@@ -432,7 +459,7 @@ function renderClusterScatter() {
     hovertemplate: 'x:%{x:.1f} y:%{y:.1f} z:%{z:.1f}<extra></extra>',
   };
 
-  document.getElementById('km-scatter-title').textContent = `K-Means — K=${k} Clusters`;
+  document.getElementById('km-scatter-title').textContent = `K-Means: K=${k} Clusters`;
   Plotly.react('chart-km', [trace], _scene3dLayout(), _plotOpts);
 }
 
@@ -467,11 +494,11 @@ function renderExplorerScatter() {
   if (!uvox.length) return;
 
   if (KM.explorerMode === 'lobe') {
-    /* One trace per lobe — Plotly renders a named legend automatically */
+    /* One trace per lobe; Plotly renders a named legend automatically */
     const lobeNames = ['RUL','RML','RLL','LUL','LLL'];
-    const lobeKeys  = new Map(); // lobe → Set of "x,y,z" keys
+    const lobeKeys  = new Map(); // lobe → Set of "x,y,z" keys (all frames: per-frame files may differ)
     lobeNames.forEach(lobe => {
-      const pts = (KM.lobeData[lobe] || []).filter(v => v.frame === 0);
+      const pts = KM.lobeData[lobe] || [];
       lobeKeys.set(lobe, new Set(pts.map(v => `${v.x},${v.y},${v.z}`)));
     });
 
@@ -487,7 +514,7 @@ function renderExplorerScatter() {
       };
     });
 
-    /* HTML pill legend — dot size independent of scatter dot size */
+    /* HTML pill legend; dot size independent of scatter dot size */
     const lobeLeg = document.getElementById('lobe-legend');
     lobeLeg.style.display = 'flex';
     lobeLeg.innerHTML = lobeNames.map(lobe =>
@@ -496,44 +523,61 @@ function renderExplorerScatter() {
         ${LOBE_META[lobe]?.label ?? lobe}
       </span>`
     ).join('');
+    const note = document.getElementById('lobe-note');
+    note.textContent   = lobeDefinitionText(KM.isLobar);
+    note.style.display = 'block';
 
-    document.getElementById('exp-title').textContent = 'Explorer — Lobes';
+    document.getElementById('exp-title').textContent = 'Explorer: Lobes';
     document.getElementById('exp-frame-ctrl').style.display = 'none';
     const lobeLayout = { ..._scene3dLayout(), showlegend: false };
     Plotly.react('chart-exp', traces, lobeLayout, _plotOpts);
 
   } else {
     document.getElementById('lobe-legend').style.display = 'none';
+    document.getElementById('lobe-note').style.display = 'none';
 
-    /* SV by frame — single Viridis trace, camera-preserving on frame change */
+    /* SV by frame: single Viridis trace, camera-preserving on frame change */
     if (!KM._svNorm) KM._svNorm = _buildSvNorm();
     const f = KM.explorerFrame;
-    const colors = uvox.map(v => KM._svNorm.get(`${v.x},${v.y},${v.z},${f}`) ?? 0);
+    const { color, text } = _expColors(f);
 
     const trace = {
       type: 'scatter3d', mode: 'markers',
       x: uvox.map(v=>v.x), y: uvox.map(v=>v.y), z: uvox.map(v=>v.z),
+      text,
       marker: {
-        size: 2.8, opacity: 0.8, color: colors,
+        size: 2.8, opacity: 0.8, color,
         colorscale: 'Viridis', cmin: 0, cmax: 3,
         colorbar: { title: { text: 'Norm. SV', side: 'right' }, thickness: 14, len: 0.6,
                     tickvals: [0,1,2,3], ticktext: ['0','1× mean','2×','3×'] },
         showscale: true,
       },
-      hovertemplate: 'x:%{x:.1f} y:%{y:.1f} z:%{z:.1f}<br>Norm. SV:%{marker.color:.3f}<extra></extra>',
+      hovertemplate: 'x:%{x:.1f} y:%{y:.1f} z:%{z:.1f}<br>Norm. SV: %{text}<extra></extra>',
     };
 
-    document.getElementById('exp-title').textContent = `Explorer — SV at Frame ${f}`;
+    document.getElementById('exp-title').textContent = `Explorer: SV at Frame ${f}`;
     document.getElementById('exp-frame-ctrl').style.display = 'flex';
     Plotly.react('chart-exp', [trace], _scene3dLayout(), _plotOpts);
   }
 }
 
+/* Per-voxel colour + hover text at a frame; voxels absent from that frame's
+   data (per-frame files need not share one voxel set) are drawn grey */
+function _expColors(frame) {
+  const color = [], text = [];
+  for (const v of KM.uvox) {
+    const sv = KM._svNorm.get(`${v.x},${v.y},${v.z},${frame}`);
+    if (sv == null) { color.push('#cbd5e1'); text.push('no data in this frame'); }
+    else            { color.push(sv);        text.push(sv.toFixed(3)); }
+  }
+  return { color, text };
+}
+
 function _expUpdateColors(frame) {
   if (!KM._svNorm) return;
-  const colors = KM.uvox.map(v => KM._svNorm.get(`${v.x},${v.y},${v.z},${frame}`) ?? 0);
-  Plotly.restyle('chart-exp', { 'marker.color': [colors] }, [0]);
-  document.getElementById('exp-title').textContent = `Explorer — SV at Frame ${frame}`;
+  const { color, text } = _expColors(frame);
+  Plotly.restyle('chart-exp', { 'marker.color': [color], text: [text] }, [0]);
+  document.getElementById('exp-title').textContent = `Explorer: SV at Frame ${frame}`;
 }
 
 function _expSetFrame(f) {
@@ -576,8 +620,8 @@ function computeMetricsWithRef(svArr, refMean) {
   const q75  = sorted[Math.floor(n * 0.75)];
   const iqr  = q75 - q25;
   const ref  = refMean ?? mean;
-  const vdp  = sv.filter(v => v < 0.3   * ref).length / n * 100;
-  const hvr  = sv.filter(v => v > 1.674 * ref).length / n * 100;
+  const vdp  = sv.filter(v => v < VDP_THRESHOLD  * ref).length / n * 100;
+  const hvr  = sv.filter(v => v > VHIP_THRESHOLD * ref).length / n * 100;
   const vh   = mean > 1e-9 ? (iqr / mean) * 100 : 0;
   return { vdp, hvr, vh, msv: mean, iqr, n };
 }
@@ -588,6 +632,7 @@ function renderClusterTable() {
   tbody.innerHTML = '';
   const gMeans = _globalMeanPerFrame();
 
+  const rows = [];
   for (let ki = 0; ki < KM.k; ki++) {
     const indices = KM.uvox.map((_, i) => i).filter(i => KM.labels[i] === ki);
     const sv = [];
@@ -597,14 +642,20 @@ function renderClusterTable() {
     /* Use average global mean across frames as the reference */
     const refMean = Object.values(gMeans).reduce((a, b) => a + b, 0) / KM.nFrames;
     const m = computeMetricsWithRef(sv, refMean);
-    if (!m) continue;
+    if (m) rows.push({ ki, indices, m });
+  }
 
+  /* Colour scale fitted to this dataset's cluster values (any upload, any units) */
+  const range = {};
+  for (const met of ['vdp', 'vh', 'msv', 'hvr']) range[met] = niceRange(rows.map(r => r.m[met]));
+
+  for (const { ki, indices, m } of rows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td><span style="display:inline-flex;align-items:center;gap:5px">
       <span style="width:9px;height:9px;border-radius:50%;background:${CLUSTER_COLORS[ki]};display:inline-block"></span>
       Cluster ${ki+1}</span></td>` +
       ['vdp','vh','msv','hvr'].map(met => {
-        const col = metricToColor(m[met], met);
+        const col = metricToColor(m[met], met, true, range[met]);
         const txt = contrastText(col);
         return `<td><span class="cell-val" style="background:${col};color:${txt}">${fmt(m[met], met)}</span></td>`;
       }).join('') +
@@ -652,7 +703,11 @@ function renderClusterTemporal() {
 const dz  = document.getElementById('drop-zone');
 const fin = document.getElementById('file-input');
 dz.addEventListener('click',     ()  => fin.click());
-fin.addEventListener('change',   e   => handleFiles(e.target.files));
+fin.addEventListener('change',   e   => {
+  const fa = [...e.target.files];
+  e.target.value = '';  // so re-selecting the same files fires 'change' again
+  handleFiles(fa);
+});
 dz.addEventListener('dragover',  e   => { e.preventDefault(); dz.classList.add('drag-over'); });
 dz.addEventListener('dragleave', ()  => dz.classList.remove('drag-over'));
 dz.addEventListener('drop',      e   => { e.preventDefault(); dz.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); });

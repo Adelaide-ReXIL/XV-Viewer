@@ -1,5 +1,5 @@
 /* ============================================================
-   charts.js — all Plotly chart rendering for index.html
+   charts.js: all Plotly chart rendering for index.html
    ============================================================ */
 
 const PLOTLY_BASE = {
@@ -37,11 +37,11 @@ function renderMetricsTable() {
     tr.innerHTML = `<td>${dot}${LOBE_META[lobe]?.label ?? lobe}</td>` +
       ['vdp', 'hvr', 'vh', 'msv'].map(met => {
         const v   = m?.[met] ?? null;
-        const col = on ? metricToColor(v, met) : '#f1f5f9';
+        const col = on ? metricToColor(v, met, true, colorRange(met)) : '#f1f5f9';
         const txt = contrastText(col);
         return `<td><span class="cell-val" style="background:${col};color:${txt}">${fmt(v, met)}</span></td>`;
       }).join('') +
-      `<td style="color:var(--muted)">${m ? m.n.toLocaleString() : '—'}</td>`;
+      `<td style="color:var(--muted)">${m ? m.n.toLocaleString() : 'n/a'}</td>`;
 
     tbody.appendChild(tr);
   });
@@ -97,7 +97,7 @@ function renderTrajectoryChart() {
     },
     /* Bottom subplot */
     xaxis2: {
-      title: { text: 'Frame  (0 = start of inspiration → 6 = end)', font: { size: 11 } },
+      title: { text: `Frame  (0 = start of inspiration → ${APP.nFrames - 1} = end)`, font: { size: 11 } },
       range: xRange, dtick: 1, gridcolor: '#f1f5f9', zeroline: false,
     },
     yaxis2: {
@@ -107,13 +107,13 @@ function renderTrajectoryChart() {
     /* Subplot titles as annotations */
     annotations: [
       {
-        text: '▲ VDP — Ventilation Defect % <span style="color:#64748b;font-size:10px">(lower = better)</span>',
+        text: '▲ VDP: Ventilation Defect % <span style="color:#64748b;font-size:10px">(lower = better)</span>',
         xref: 'paper', yref: 'paper', x: 0.01, y: 1.03,
         xanchor: 'left', yanchor: 'bottom', showarrow: false,
         font: { size: 11, color: '#475569' },
       },
       {
-        text: '▲ V_hip — High-Ventilation % <span style="color:#64748b;font-size:10px">(compensatory hyper-ventilation)</span>',
+        text: '▲ V_hip: High-Ventilation % <span style="color:#64748b;font-size:10px">(compensatory hyper-ventilation)</span>',
         xref: 'paper', yref: 'paper', x: 0.01, y: 0.48,
         xanchor: 'left', yanchor: 'bottom', showarrow: false,
         font: { size: 11, color: '#475569' },
@@ -128,7 +128,7 @@ function renderTrajectoryChart() {
   }, { responsive: true, displayModeBar: false });
 }
 
-/* ── 3. SV distribution — violin per lobe or per frame ────── */
+/* ── 3. SV distribution: violin per lobe or per frame ────── */
 function renderDistChart() {
   const mode   = document.getElementById('dist-mode').value;
   const FCOLS  = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#f97316'];
@@ -160,19 +160,33 @@ function renderDistChart() {
   Plotly.react('chart-dist', traces, {
     ...PLOTLY_BASE,
     margin: { l: 56, r: 16, t: 16, b: 56 },
-    yaxis: { title: 'Normalised SV', zeroline: true, zerolinecolor: '#cbd5e1' },
+    yaxis: { title: 'Specific ventilation (SV)', zeroline: true, zerolinecolor: '#cbd5e1' },
     legend: { orientation: 'h', y: -0.32, font: { size: 11 } },
     violinmode: 'group',
   }, { responsive: true, displayModeBar: false });
 }
 
-/* ── 4. 3D scatter — INIT (full redraw on data load) ────────
-   Cached subsampled voxel positions — coords never change
+/* ── 4. 3D scatter: INIT (full redraw on data load) ────────
+   Cached subsampled voxel positions; coords never change
    between frames, so subsequent frame changes only restyle
    the marker colours, preserving camera angle.
    ─────────────────────────────────────────────────────────── */
 let _scatter3dPts = null;   // cached on first init
 let _scatter3dNorm = null;  // normalised SV map keyed by "x,y,z,frame"
+
+/* Voxel absent from a frame (per-frame files need not share one voxel set).
+   Plotly passes colour strings through the colorscale untouched. */
+const SCATTER_NO_DATA = '#cbd5e1';
+
+function _scatterColors(pts, frame) {
+  const color = [], text = [];
+  for (const v of pts) {
+    const sv = _scatter3dNorm.get(`${v.x},${v.y},${v.z},${frame}`);
+    if (sv == null) { color.push(SCATTER_NO_DATA); text.push('no data in this frame'); }
+    else            { color.push(sv);              text.push(sv.toFixed(3)); }
+  }
+  return { color, text };
+}
 
 function _buildNormSvMap(all) {
   /* Normalise raw SV by global mean for the colorscale only */
@@ -185,11 +199,17 @@ function _buildNormSvMap(all) {
 
 function initScatter3D() {
   const all = APP.lobeData.whole || [];
-  const f0  = all.filter(v => v.frame === 0);
 
-  /* Subsample once — same spatial pts for all frames */
-  const step = Math.max(1, Math.floor(f0.length / 3000));
-  _scatter3dPts  = f0.filter((_, i) => i % step === 0);
+  /* Every voxel position seen in any frame (not just frame 0) */
+  const seen = new Set(), pos = [];
+  for (const v of all) {
+    const key = `${v.x},${v.y},${v.z}`;
+    if (!seen.has(key)) { seen.add(key); pos.push(v); }
+  }
+
+  /* Subsample once; same spatial pts for all frames */
+  const step = Math.max(1, Math.floor(pos.length / 3000));
+  _scatter3dPts  = pos.filter((_, i) => i % step === 0);
   _scatter3dNorm = _buildNormSvMap(all);
 
   const trace = _buildScatterTrace(_scatter3dPts, APP.frame);
@@ -202,20 +222,21 @@ function initScatter3D() {
 
 function updateScatter3DColors(frame) {
   if (!_scatter3dPts) { initScatter3D(); return; }
-  const colors = _scatter3dPts.map(v => _scatter3dNorm.get(`${v.x},${v.y},${v.z},${frame}`) ?? 0);
-  /* Restyle only — camera angle is preserved */
-  Plotly.restyle('chart-3d', { 'marker.color': [colors] }, [0]);
+  const { color, text } = _scatterColors(_scatter3dPts, frame);
+  /* Restyle only, so the camera angle is preserved */
+  Plotly.restyle('chart-3d', { 'marker.color': [color], text: [text] }, [0]);
 }
 
 function _buildScatterTrace(pts, frame) {
-  const colors = pts.map(v => _scatter3dNorm.get(`${v.x},${v.y},${v.z},${frame}`) ?? 0);
-  /* Fixed colorscale anchored at 0–3× mean (mean=1 after normalisation) */
+  const { color, text } = _scatterColors(pts, frame);
+  /* Fixed colorscale anchored at 0 to 3× mean (mean=1 after normalisation) */
   return {
     type: 'scatter3d', mode: 'markers',
     x: pts.map(v => v.x), y: pts.map(v => v.y), z: pts.map(v => v.z),
+    text,
     marker: {
       size: 2.8, opacity: 0.8,
-      color: colors,
+      color,
       colorscale: 'Viridis',
       cmin: 0, cmax: 3,
       colorbar: {
@@ -226,7 +247,7 @@ function _buildScatterTrace(pts, frame) {
       },
       showscale: true,
     },
-    hovertemplate: 'x:%{x:.1f}  y:%{y:.1f}  z:%{z:.1f}<br>Norm. SV:%{marker.color:.3f}<extra></extra>',
+    hovertemplate: 'x:%{x:.1f}  y:%{y:.1f}  z:%{z:.1f}<br>Norm. SV: %{text}<extra></extra>',
   };
 }
 
@@ -271,7 +292,7 @@ function renderOnFrameChange() {
   renderMetricsTable();
   renderDistChart();
   updateScatter3DColors(APP.frame);
-  /* Move cursor via relayout — does not affect y-axis auto-range */
+  /* Move cursor via relayout; does not affect y-axis auto-range */
   if (document.getElementById('chart-trajectory')?.data?.length) {
     Plotly.relayout('chart-trajectory', { shapes: _trajCursorShapes(APP.frame) });
   }
